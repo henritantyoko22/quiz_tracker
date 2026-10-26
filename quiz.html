@@ -74,6 +74,7 @@
     const API_SUBMIT_URL = 'https://quiz-tracker-seven.vercel.app/v1/quiz/submit';
 
     let userNama = '', userNim = '';
+    let isLoggedIn = false; // FLAG: Proctoring mati sampai login berhasil
     const MAX_VIOLATIONS = 3;
     let violationCount = 0;
     let isSubmitted = false;
@@ -81,10 +82,16 @@
     const loginModal = new bootstrap.Modal(document.getElementById('loginModal'));
     window.addEventListener('DOMContentLoaded', () => loginModal.show());
 
+    // --- PROSES LOGIN ---
     document.getElementById('login-form').addEventListener('submit', (e) => {
       e.preventDefault();
       userNama = document.getElementById('input-nama').value.trim();
       userNim = document.getElementById('input-nim').value.trim();
+
+      if (!userNama || !userNim) {
+        alert('Nama dan NIM wajib diisi!');
+        return;
+      }
 
       document.getElementById('display-user').textContent = `Mahasiswa: ${userNama}`;
       document.getElementById('display-nim').textContent = `NIM: ${userNim}`;
@@ -92,21 +99,18 @@
       loginModal.hide();
       document.getElementById('quiz-container').classList.remove('d-none');
       
+      // Mengaktifkan Status Login & Proctoring
+      isLoggedIn = true;
+
       // Minta Layar Penuh
       if (document.documentElement.requestFullscreen) {
         document.documentElement.requestFullscreen().catch(() => {});
       }
     });
 
-    // Proteksi Teks Essay
-    document.querySelectorAll('.no-copy-input').forEach(el => {
-      el.addEventListener('paste', (e) => { e.preventDefault(); if (!isSubmitted) sendViolationLog('PASTE_ESSAY', 'Mencoba menempelkan teks.'); });
-      el.addEventListener('copy', (e) => { e.preventDefault(); if (!isSubmitted) sendViolationLog('COPY_ESSAY', 'Mencoba menyalin teks.'); });
-      el.addEventListener('cut', (e) => e.preventDefault());
-    });
-
+    // --- LOGIKA PELANGGARAN (HANYA JIKA SUDAH LOGIN & BELUM SUBMIT) ---
     async function sendViolationLog(type, detail) {
-      if (isSubmitted) return;
+      if (!isLoggedIn || isSubmitted) return; // Abaikan jika belum login atau sudah submit
 
       violationCount++;
       document.getElementById('violation-badge').textContent = `Pelanggaran: ${violationCount} / ${MAX_VIOLATIONS}`;
@@ -132,7 +136,7 @@
     }
 
     function autoSubmitQuiz() {
-      if (isSubmitted) return;
+      if (!isLoggedIn || isSubmitted) return;
       isSubmitted = true;
       disableForm();
       alert('Pelanggaran mencapai batas maksimal! Ujian dihentikan dan jawaban dikirim otomatis.');
@@ -166,10 +170,6 @@
           })
         });
 
-        // Lepas Listener Proctoring
-        window.removeEventListener('blur', handleBlur);
-        document.removeEventListener('visibilitychange', handleVisibility);
-
         alert('Ujian Selesai! Terima kasih.');
         window.location.href = 'about:blank';
       } catch (err) {
@@ -177,19 +177,35 @@
       }
     }
 
+    // --- PROTEKSI ESSAY ---
+    document.querySelectorAll('.no-copy-input').forEach(el => {
+      el.addEventListener('paste', (e) => { 
+        e.preventDefault(); 
+        if (isLoggedIn && !isSubmitted) sendViolationLog('PASTE_ESSAY', 'Mencoba menempelkan teks.'); 
+      });
+      el.addEventListener('copy', (e) => { 
+        e.preventDefault(); 
+        if (isLoggedIn && !isSubmitted) sendViolationLog('COPY_ESSAY', 'Mencoba menyalin teks.'); 
+      });
+      el.addEventListener('cut', (e) => e.preventDefault());
+    });
+
     document.getElementById('essay-form').addEventListener('submit', (e) => {
       e.preventDefault();
-      if (isSubmitted) return;
+      if (!isLoggedIn || isSubmitted) return;
       isSubmitted = true;
       disableForm();
       submitData('SUBMITTED_MANUALLY');
     });
 
-    const handleVisibility = () => { if (document.hidden && !isSubmitted) sendViolationLog('PINDAH_TAB', 'Berpindah tab browser.'); };
-    const handleBlur = () => { if (!isSubmitted) sendViolationLog('BLUR_WINDOW', 'Fokus layar ujian hilang.'); };
+    // Listener Pindah Tab & Layar (Cek status isLoggedIn)
+    window.addEventListener('blur', () => {
+      if (isLoggedIn && !isSubmitted) sendViolationLog('BLUR_WINDOW', 'Fokus layar ujian hilang.');
+    });
 
-    document.addEventListener('visibilitychange', handleVisibility);
-    window.addEventListener('blur', handleBlur);
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden && isLoggedIn && !isSubmitted) sendViolationLog('PINDAH_TAB', 'Berpindah tab browser.');
+    });
   </script>
 </body>
 </html>
