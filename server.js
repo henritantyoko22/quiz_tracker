@@ -234,7 +234,7 @@ app.post('/v1/admin/login', (req, res) => {
 app.get('/v1/admin/submissions', async (req, res) => {
   try {
     const result = await db.query(
-      `SELECT id, user_id AS nama, nim, quiz_id, answers, status, submitted_at 
+      `SELECT id, user_id AS nama, nim, quiz_id, answers, status, grade, feedback, submitted_at 
        FROM quiz_submissions 
        ORDER BY submitted_at DESC`
     );
