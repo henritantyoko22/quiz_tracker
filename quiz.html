@@ -3,197 +3,195 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Ujian Online Terproteksi</title>
+  <title>Ujian Essay Terproteksi</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
   <style>
-    body {
-      background-color: #f8f9fa;
-      user-select: none; /* Mencegah seleksi teks */
-      -webkit-user-select: none;
-    }
-    .quiz-card {
-      max-width: 700px;
-      margin: 30px auto;
-      border: none;
-      border-radius: 12px;
-      box-shadow: 0 4px 20px rgba(0,0,0,0.08);
-    }
-    #alert-toast {
-      position: fixed;
-      top: 20px;
-      right: 20px;
-      z-index: 9999;
-      display: none;
-    }
+    body { background-color: #f8f9fa; user-select: none; -webkit-user-select: none; }
+    .card-custom { max-width: 750px; margin: 30px auto; border-radius: 12px; border: none; box-shadow: 0 4px 20px rgba(0,0,0,0.08); }
+    .no-copy-input { resize: none; }
   </style>
 </head>
 <body>
 
-  <!-- Toast Notifikasi Peringatan -->
-  <div id="alert-toast" class="toast align-items-center text-bg-danger border-0 show" role="alert">
-    <div class="d-flex">
-      <div class="toast-body" id="toast-message">
-        ⚠️ Pelanggaran terdeteksi!
+  <!-- 1. MODAL LOGIN MAHASISWA -->
+  <div class="modal fade" id="loginModal" data-bs-backdrop="static" data-bs-keyboard="false" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-content">
+        <div class="modal-header bg-primary text-white">
+          <h5 class="modal-title fw-bold">Login Peserta Ujian</h5>
+        </div>
+        <div class="modal-body">
+          <form id="login-form">
+            <div class="mb-3">
+              <label class="form-label fw-bold">Nama Lengkap Mahasiswa</label>
+              <input type="text" id="input-nama" class="form-control" placeholder="Contoh: Budi Santoso" required>
+            </div>
+            <div class="mb-3">
+              <label class="form-label fw-bold">NIM (Nomor Induk Mahasiswa)</label>
+              <input type="text" id="input-nim" class="form-control" placeholder="Contoh: 24060120140001" required>
+            </div>
+            <button type="submit" class="btn btn-primary w-100 fw-bold">Mulai Ujian</button>
+          </form>
+        </div>
       </div>
     </div>
   </div>
 
-  <div class="container">
-    <div class="card quiz-card p-4">
-      <!-- Header Ujian -->
+  <!-- 2. AREA HALAMAN UJIAN -->
+  <div class="container d-none" id="quiz-container">
+    <div class="card card-custom p-4">
       <div class="d-flex justify-content-between align-items-center border-bottom pb-3 mb-3">
         <div>
-          <h5 class="fw-bold m-0" id="display-user">Peserta: -</h5>
-          <small class="text-muted" id="display-quiz">Kuis: -</small>
+          <h5 class="fw-bold m-0" id="display-user">Mahasiswa: -</h5>
+          <small class="text-muted" id="display-nim">NIM: -</small>
         </div>
-        <button id="btn-fullscreen" class="btn btn-warning btn-sm fw-bold">
-          🖥️ Masuk Mode Fullscreen
-        </button>
+        <span class="badge bg-danger fs-6" id="violation-badge">Pelanggaran: 0 / 3</span>
       </div>
 
-      <!-- Area Soal -->
-      <form id="quiz-form">
+      <div class="alert alert-warning py-2 small fw-bold">
+        ⚠️ PERINGATAN: Dilarang Copy-Paste, memindahkan tab, atau keluar dari fullscreen!
+      </div>
+
+      <form id="essay-form">
         <div class="mb-4">
-          <p class="fw-semibold">1. Apa fungsi utama dari Express.js pada arsitektur backend Node.js?</p>
-          <div class="form-check mb-2">
-            <input class="form-check-input" type="radio" name="q1" id="q1a" value="A">
-            <label class="form-check-label" for="q1a">Mengatur basis data PostgreSQL secara langsung</label>
-          </div>
-          <div class="form-check mb-2">
-            <input class="form-check-input" type="radio" name="q1" id="q1b" value="B">
-            <label class="form-check-label" for="q1b">Menyediakan framework web server dan penanganan rute HTTP</label>
-          </div>
-          <div class="form-check mb-2">
-            <input class="form-check-input" type="radio" name="q1" id="q1c" value="C">
-            <label class="form-check-label" for="q1c">Menjalankan simulasi grafik di antarmuka browser</label>
-          </div>
+          <label class="fw-bold mb-2">1. Jelaskan bagaimana arsitektur Express.js mengelola middleware dan routing HTTP!</label>
+          <textarea name="essay_1" class="form-control no-copy-input" rows="4" placeholder="Ketik jawaban essay Anda di sini..." required></textarea>
         </div>
 
         <div class="mb-4">
-          <p class="fw-semibold">2. Event listener mana di JavaScript yang digunakan untuk mendeteksi saat pengguna berpindah tab browser?</p>
-          <div class="form-check mb-2">
-            <input class="form-check-input" type="radio" name="q2" id="q2a" value="A">
-            <label class="form-check-label" for="q2a">window.onblur</label>
-          </div>
-          <div class="form-check mb-2">
-            <input class="form-check-input" type="radio" name="q2" id="q2b" value="B">
-            <label class="form-check-label" for="q2b">document.visibilitychange</label>
-          </div>
-          <div class="form-check mb-2">
-            <input class="form-check-input" type="radio" name="q2" id="q2c" value="C">
-            <label class="form-check-label" for="q2c">document.oncopy</label>
-          </div>
+          <label class="fw-bold mb-2">2. Mengapa proteksi sisi kuis berbasis website lebih aman dibandingkan hanya mengandalkan Chrome Extension?</label>
+          <textarea name="essay_2" class="form-control no-copy-input" rows="4" placeholder="Ketik jawaban essay Anda di sini..." required></textarea>
         </div>
 
-        <button type="submit" class="btn btn-success w-100 fw-bold">Selesai & Kirim Jawaban</button>
+        <button type="submit" class="btn btn-success w-100 fw-bold">Kirim Jawaban Essay</button>
       </form>
     </div>
   </div>
 
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
   <script>
-    // Konfigurasi Endpoint Backend Vercel
-    const API_URL = 'https://quiz-tracker-seven.vercel.app/v1/violations';
-    
-    // Identitas Sesi Ujian (Dapat disesuaikan dari query URL atau login)
-    const USER_ID = new URLSearchParams(window.location.search).get('user') || 'MHS_' + Math.floor(1000 + Math.random() * 9000);
-    const QUIZ_ID = new URLSearchParams(window.location.search).get('quiz') || 'QUIZ_WEB_DEV';
+    const API_VIOLATION_URL = 'https://quiz-tracker-seven.vercel.app/v1/violations';
+    const API_SUBMIT_URL = 'https://quiz-tracker-seven.vercel.app/v1/quiz/submit';
 
-    document.getElementById('display-user').textContent = `Peserta: ${USER_ID}`;
-    document.getElementById('display-quiz').textContent = `Kuis: ${QUIZ_ID}`;
+    let userNama = '', userNim = '';
+    const MAX_VIOLATIONS = 3;
+    let violationCount = 0;
+    let isSubmitted = false;
 
-    // -------------------------------------------------------------
-    // MODUL PROCTORING (PENGIRIM LOG & ALERTS)
-    // -------------------------------------------------------------
-    function showAlert(msg) {
-      const toastEl = document.getElementById('alert-toast');
-      document.getElementById('toast-message').textContent = `⚠️ PERINGATAN: ${msg}`;
-      toastEl.style.display = 'block';
-      setTimeout(() => { toastEl.style.display = 'none'; }, 3500);
+    // Tampilkan Modal Login Pertama Kali
+    const loginModal = new bootstrap.Modal(document.getElementById('loginModal'));
+    window.addEventListener('DOMContentLoaded', () => loginModal.show());
+
+    document.getElementById('login-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      userNama = document.getElementById('input-nama').value;
+      userNim = document.getElementById('input-nim').value;
+
+      document.getElementById('display-user').textContent = `Mahasiswa: ${userNama}`;
+      document.getElementById('display-nim').textContent = `NIM: ${userNim}`;
+
+      loginModal.hide();
+      document.getElementById('quiz-container').classList.remove('d-none');
+      document.documentElement.requestFullscreen().catch(() => {});
+    });
+
+    // --- PROTEKSI COPY-PASTE KHUSUS TEXTAREA ESSAY ---
+    document.querySelectorAll('.no-copy-input').forEach(textarea => {
+      // Blokir Paste
+      textarea.addEventListener('paste', (e) => {
+        e.preventDefault();
+        sendViolationLog('PASTE_ESSAY', 'Mencoba menempelkan (paste) teks ke dalam jawaban essay.');
+      });
+      // Blokir Copy / Cut
+      textarea.addEventListener('copy', (e) => {
+        e.preventDefault();
+        sendViolationLog('COPY_ESSAY', 'Mencoba menyalin (copy) teks dari jawaban essay.');
+      });
+      textarea.addEventListener('cut', (e) => e.preventDefault());
+    });
+
+    async function loadQuestions(quizId) {
+    try {
+        const res = await fetch(`https://quiz-tracker-seven.vercel.app/v1/quiz/questions/${quizId}`);
+        const result = await res.json();
+        
+        if (result.status === 'success') {
+        const container = document.getElementById('essay-form');
+        // Render elemen textarea untuk setiap soal essay secara dinamis
+        }
+    } catch (err) {
+        console.error('Gagal memuat soal:', err);
+    }
     }
 
     async function sendViolationLog(type, detail) {
-      showAlert(detail);
-      
-      const payload = {
-        userId: USER_ID,
-        quizId: QUIZ_ID,
-        type: type,
-        detail: detail,
-        timestamp: new Date().toISOString(),
-        url: window.location.href
-      };
+      if (isSubmitted) return;
 
-      try {
-        await fetch(API_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        });
-      } catch (err) {
-        console.error('Gagal mengirim log pelanggaran:', err);
+      violationCount++;
+      document.getElementById('violation-badge').textContent = `Pelanggaran: ${violationCount} / ${MAX_VIOLATIONS}`;
+      alert(`⚠️ PELANGGARAN TERDETEKSI: ${detail}`);
+
+      await fetch(API_VIOLATION_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: userNama,
+          quizId: 'ESSAY_WEB_DEV',
+          type: type,
+          detail: `[NIM: ${userNim}] ${detail}`,
+          timestamp: new Date().toISOString(),
+          url: window.location.href
+        })
+      });
+
+      if (violationCount >= MAX_VIOLATIONS) {
+        autoSubmitQuiz();
       }
     }
 
-    // 1. Paksa / Deteksi Mode Fullscreen
-    const btnFullscreen = document.getElementById('btn-fullscreen');
-    btnFullscreen.addEventListener('click', () => {
-      if (!document.fullscreenElement) {
-        document.documentElement.requestFullscreen().catch(err => console.log(err));
-      }
-    });
+    function autoSubmitQuiz() {
+      if (isSubmitted) return;
+      isSubmitted = true;
+      alert('Pelanggaran mencapai batas maksimal! Jawaban Anda disubmit otomatis.');
+      submitData('DISQUALIFIED');
+    }
 
-    document.addEventListener('fullscreenchange', () => {
-      if (!document.fullscreenElement) {
-        sendViolationLog('EXIT_FULLSCREEN', 'Keluar dari mode layar penuh (Fullscreen).');
-      }
-    });
+    async function submitData(status = 'COMPLETED') {
+      const formData = new FormData(document.getElementById('essay-form'));
+      const answers = {
+        essay_1: formData.get('essay_1'),
+        essay_2: formData.get('essay_2')
+      };
 
-    // 2. Deteksi Pindah Tab
-    document.addEventListener('visibilitychange', () => {
-      if (document.hidden) {
-        sendViolationLog('PINDAH_TAB', 'Terdeteksi berpindah ke tab browser lain.');
-      }
-    });
+      await fetch(API_SUBMIT_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: userNama,
+          nim: userNim,
+          quizId: 'ESSAY_WEB_DEV',
+          answers: answers,
+          status: status
+        })
+      });
 
-    // 3. Deteksi Pindah Jendela / Fokus Layar
-    window.addEventListener('blur', () => {
-      sendViolationLog('PINDAH_APLIKASI', 'Fokus layar hilang! Membuka aplikasi lain.');
-    });
-
-    // 4. Blokir & Catat Klik Kanan
-    document.addEventListener('contextmenu', (e) => {
-      e.preventDefault();
-      sendViolationLog('KLIK_KANAN', 'Mencoba membuka menu klik kanan.');
-    });
-
-    // 5. Blokir & Catat Copy/Paste/Cut/Shortcuts
-    document.addEventListener('copy', (e) => {
-      e.preventDefault();
-      sendViolationLog('COPY_TEXT', 'Mencoba menyalin (copy) teks kuis.');
-    });
-
-    document.addEventListener('paste', (e) => {
-      e.preventDefault();
-      sendViolationLog('PASTE_TEXT', 'Mencoba menempelkan (paste) teks ke halaman.');
-    });
-
-    document.addEventListener('keydown', (e) => {
-      // Blokir F12 (DevTools), Ctrl+U (View Source), Ctrl+Shift+I
-      if (
-        e.key === 'F12' || 
-        (e.ctrlKey && (e.key === 'u' || e.key === 'U' || e.key === 's' || e.key === 'S')) ||
-        (e.ctrlKey && e.shiftKey && (e.key === 'I' || e.key === 'i' || e.key === 'J' || e.key === 'j'))
-      ) {
-        e.preventDefault();
-        sendViolationLog('DEVTOOLS_SHORTCUT', 'Mencoba membuka Developer Tools / Source Code.');
-      }
-    });
-
-    // Submit Form Kuis
-    document.getElementById('quiz-form').addEventListener('submit', (e) => {
-      e.preventDefault();
-      alert('Ujian selesai! Jawaban telah berhasil dikirim.');
+      alert('Ujian Selesai! Terima kasih.');
       window.location.reload();
+    }
+
+    document.getElementById('essay-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      if (isSubmitted) return;
+      isSubmitted = true;
+      submitData('SUBMITTED_MANUALLY');
+    });
+
+    // Event Listener Pindah Tab / Screen Blur
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden && !isSubmitted) sendViolationLog('PINDAH_TAB', 'Terdeteksi berpindah tab browser.');
+    });
+    window.addEventListener('blur', () => {
+      if (!isSubmitted) sendViolationLog('BLUR_WINDOW', 'Fokus jendela ujian hilang.');
     });
   </script>
 </body>

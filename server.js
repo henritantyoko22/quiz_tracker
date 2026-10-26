@@ -102,6 +102,123 @@ app.get('/v1/analytics/types-summary', async (req, res) => {
   }
 });
 
+// Rute untuk Menyimpan Jawaban Kuis (User Submit)
+app.post('/v1/quiz/submit', async (req, res) => {
+  const { userId, nim, quizId, answers, status } = req.body;
+  try {
+    const result = await db.query(
+      `INSERT INTO quiz_submissions (user_id, nim, quiz_id, answers, status, submitted_at)
+       VALUES ($1, $2, $3, $4, $5, NOW()) RETURNING *`,
+      [userId, nim, quizId, JSON.stringify(answers), status]
+    );
+    res.json({ status: 'success', data: result.rows[0] });
+  } catch (err) {
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+});
+
+// Rute Admin untuk Impor Soal
+app.post('/v1/admin/questions/import', async (req, res) => {
+  const { quizId, questions } = req.body; // Array of questions
+  try {
+    // Simpan data soal ke database atau memory/file JSON
+    res.json({ status: 'success', message: `${questions.length} soal berhasil diimpor!` });
+  } catch (err) {
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+});
+
+// =============================================================
+// 1. ENDPOINT: MENGAMBIL SOAL KUIS DARI DATABASE
+// =============================================================
+app.get('/v1/quiz/questions/:quizId', async (req, res) => {
+  const { quizId } = req.params;
+
+  try {
+    const result = await db.query(
+      `SELECT id, question_text, question_type 
+       FROM quiz_questions 
+       WHERE quiz_id = $1 
+       ORDER BY created_at ASC`,
+      [quizId]
+    );
+
+    res.json({
+      status: 'success',
+      quizId: quizId,
+      totalQuestions: result.rows.length,
+      data: result.rows
+    });
+  } catch (err) {
+    console.error('Error fetching questions:', err);
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+});
+
+// =============================================================
+// 2. ENDPOINT: MENYIMPAN JAWABAN PESERTA KUIS
+// =============================================================
+app.post('/v1/quiz/submit', async (req, res) => {
+  const { userId, nim, quizId, answers, status } = req.body;
+
+  if (!userId || !nim || !quizId || !answers) {
+    return res.status(400).json({
+      status: 'error',
+      message: 'Parameter userId, nim, quizId, dan answers wajib diisi!'
+    });
+  }
+
+  try {
+    const result = await db.query(
+      `INSERT INTO quiz_submissions (user_id, nim, quiz_id, answers, status, submitted_at)
+       VALUES ($1, $2, $3, $4, $5, NOW())
+       RETURNING *`,
+      [userId, nim, quizId, JSON.stringify(answers), status || 'COMPLETED']
+    );
+
+    res.json({
+      status: 'success',
+      message: 'Jawaban kuis berhasil disimpan!',
+      data: result.rows[0]
+    });
+  } catch (err) {
+    console.error('Error submitting quiz answers:', err);
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+});
+
+// =============================================================
+// 3. ENDPOINT: IMPOR SOAL BARU KE BANK SOAL (ADMIN)
+// =============================================================
+app.post('/v1/admin/questions/import', async (req, res) => {
+  const { quizId, questions } = req.body;
+
+  if (!quizId || !Array.isArray(questions) || questions.length === 0) {
+    return res.status(400).json({
+      status: 'error',
+      message: 'Format data tidak valid! Sertakan quizId dan array questions.'
+    });
+  }
+
+  try {
+    for (const q of questions) {
+      await db.query(
+        `INSERT INTO quiz_questions (quiz_id, question_text, question_type)
+         VALUES ($1, $2, $3)`,
+        [quizId, q.question_text || q.question, q.question_type || 'ESSAY']
+      );
+    }
+
+    res.json({
+      status: 'success',
+      message: `${questions.length} soal berhasil diimpor ke kuis ${quizId}!`
+    });
+  } catch (err) {
+    console.error('Error importing questions:', err);
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Server API berjalan di port ${PORT}`);
 });
