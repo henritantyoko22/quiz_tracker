@@ -12,7 +12,7 @@
       -webkit-user-select: none; 
     }
     .card-custom { 
-      max-width: 800px; 
+      max-width: 850px; 
       margin: 30px auto; 
       border-radius: 12px; 
       border: none; 
@@ -44,6 +44,13 @@
       from { transform: translateY(-20px); opacity: 0; }
       to { transform: translateY(0); opacity: 1; }
     }
+    .pulse-danger {
+      animation: pulseAnim 1s infinite alternate;
+    }
+    @keyframes pulseAnim {
+      from { opacity: 1; transform: scale(1); }
+      to { opacity: 0.7; transform: scale(1.05); }
+    }
   </style>
 </head>
 <body>
@@ -70,10 +77,21 @@
             </div>
             <div class="mb-3">
               <label class="form-label fw-bold">ID / Kode Kuis</label>
-              <input type="text" id="input-quiz-id" class="form-control" placeholder="Contoh: ESSAY_WEB_DEV" value="ESSAY_WEB_DEV" required>
-              <div class="form-text small">ID kuis menentukan soal yang ditampilkan (Bisa diganti atau gunakan parameter URL <code>?quizId=...</code>).</div>
+              <div class="input-group">
+                <input type="text" id="input-quiz-id" class="form-control" placeholder="Contoh: ESSAY_WEB_DEV" value="ESSAY_WEB_DEV" required>
+                <button type="button" class="btn btn-outline-secondary" onclick="checkScheduleInfo()">Cek Jadwal</button>
+              </div>
+              <div class="form-text small">Atau gunakan parameter URL <code>?quizId=...</code></div>
             </div>
-            <button type="submit" class="btn btn-primary w-100 fw-bold py-2 mt-2">Mulai Ujian</button>
+
+            <!-- Banner Jadwal Kuis -->
+            <div id="schedule-status-box" class="alert alert-info py-2 small d-none mb-3">
+              <div id="schedule-status-text">Memeriksa jadwal...</div>
+            </div>
+
+            <button type="submit" id="btn-start-quiz" class="btn btn-primary w-100 fw-bold py-2 mt-2">
+              Mulai Ujian
+            </button>
           </form>
         </div>
       </div>
@@ -83,8 +101,8 @@
   <!-- Area Ujian -->
   <div class="container d-none" id="quiz-container">
     <div class="card card-custom p-4">
-      <!-- Header Ujian -->
-      <div class="d-flex justify-content-between align-items-center border-bottom pb-3 mb-3">
+      <!-- Header Ujian & Timer Waktu -->
+      <div class="d-flex justify-content-between align-items-center border-bottom pb-3 mb-3 flex-wrap gap-2">
         <div>
           <h5 class="fw-bold m-0" id="display-user">Mahasiswa: -</h5>
           <div class="d-flex align-items-center gap-2 mt-1">
@@ -92,7 +110,20 @@
             <span class="badge bg-secondary" id="display-quiz-id">Kuis: -</span>
           </div>
         </div>
-        <span class="badge bg-danger fs-6" id="violation-badge">Pelanggaran: 0 / 3</span>
+
+        <div class="d-flex align-items-center gap-3">
+          <!-- Indikator Timer Waktu Ujian -->
+          <div class="d-flex align-items-center bg-white border rounded px-3 py-1 shadow-sm">
+            <span class="me-2 fs-5">⏳</span>
+            <div>
+              <small class="text-muted d-block fw-bold" style="font-size: 10px;">SISA WAKTU</small>
+              <span id="quiz-timer" class="fw-bold font-monospace fs-5 text-primary">00:00</span>
+            </div>
+          </div>
+
+          <!-- Indikator Pelanggaran (Berapa dari Berapa) -->
+          <span class="badge bg-danger fs-6 py-2 px-3 shadow-sm" id="violation-badge">Pelanggaran: 0 / 3</span>
+        </div>
       </div>
 
       <div class="alert alert-warning py-2 small fw-bold">
@@ -115,7 +146,7 @@
         <!-- Kontainer Soal-Soal Dinamis -->
         <div id="questions-list"></div>
 
-        <button type="submit" id="btn-submit" class="btn btn-success w-100 fw-bold py-2 mt-3">
+        <button type="submit" id="btn-submit" class="btn btn-success w-100 fw-bold py-2 mt-3 shadow-sm">
           Kirim Jawaban Essay
         </button>
       </form>
@@ -130,11 +161,15 @@
       <p class="text-muted" id="finish-message">
         Terima kasih, jawaban Anda telah berhasil terkirim dan tersimpan di server.
       </p>
-      <div class="border rounded p-3 bg-light text-start mx-auto my-3" style="max-width: 450px;">
-        <div><b>Nama:</b> <span id="finish-name">-</span></div>
-        <div><b>NIM:</b> <span id="finish-nim">-</span></div>
-        <div><b>ID Kuis:</b> <span id="finish-quiz">-</span></div>
-        <div><b>Status Submit:</b> <span id="finish-status" class="badge bg-success">COMPLETED</span></div>
+      <div class="border rounded p-3 bg-light text-start mx-auto my-3 shadow-sm" style="max-width: 450px;">
+        <div class="mb-1"><b>Nama:</b> <span id="finish-name">-</span></div>
+        <div class="mb-1"><b>NIM:</b> <span id="finish-nim">-</span></div>
+        <div class="mb-1"><b>ID Kuis:</b> <span id="finish-quiz">-</span></div>
+        <div class="mb-1"><b>Status Submit:</b> <span id="finish-status" class="badge bg-success">COMPLETED</span></div>
+        <div class="mt-2 pt-2 border-top">
+          <b>Laporan Pelanggaran:</b> 
+          <span id="finish-violation" class="badge bg-secondary fs-6 ms-1">0 / 3</span>
+        </div>
       </div>
       <small class="text-muted">Anda dapat menutup jendela browser ini.</small>
     </div>
@@ -148,12 +183,18 @@
     const API_VIOLATION_URL = `${API_BASE}/v1/violations`;
     const API_SUBMIT_URL = `${API_BASE}/v1/quiz/submit`;
     const API_QUESTIONS_URL = `${API_BASE}/v1/quiz/questions`;
+    const API_SETTINGS_URL = `${API_BASE}/v1/quiz/settings`;
 
     let userNama = '', userNim = '', quizId = 'ESSAY_WEB_DEV';
     let isLoggedIn = false;
-    const MAX_VIOLATIONS = 3;
+    let MAX_VIOLATIONS = 3;
     let violationCount = 0;
     let isSubmitted = false;
+
+    // Timer Variabel
+    let timerInterval = null;
+    let remainingSeconds = 60 * 60; // Default 60 menit
+    let quizSettings = null;
 
     // Bank Soal Fallback jika Database kosong atau server offline
     const FALLBACK_QUESTION_BANKS = {
@@ -171,7 +212,7 @@
 
     const loginModal = new bootstrap.Modal(document.getElementById('loginModal'));
 
-    // Inisialisasi: Baca query param ?quizId=... jika ada
+    // Inisialisasi Halaman
     window.addEventListener('DOMContentLoaded', () => {
       const urlParams = new URLSearchParams(window.location.search);
       const urlQuizId = urlParams.get('quizId');
@@ -179,9 +220,80 @@
         document.getElementById('input-quiz-id').value = urlQuizId.trim();
       }
       loginModal.show();
+      checkScheduleInfo();
     });
 
-    // --- PROSES LOGIN PESERTA ---
+    document.getElementById('input-quiz-id').addEventListener('change', checkScheduleInfo);
+
+    // --- CEK JADWAL KUIS DARI SERVER (Jam Buka - Jam Tutup) ---
+    async function checkScheduleInfo() {
+      const targetQuiz = document.getElementById('input-quiz-id').value.trim() || 'ESSAY_WEB_DEV';
+      const statusBox = document.getElementById('schedule-status-box');
+      const statusText = document.getElementById('schedule-status-text');
+      const startBtn = document.getElementById('btn-start-quiz');
+
+      statusBox.classList.remove('d-none');
+      statusBox.className = 'alert alert-info py-2 small mb-3';
+      statusText.innerHTML = 'Memeriksa jadwal & ketersediaan kuis...';
+
+      try {
+        const res = await fetch(`${API_SETTINGS_URL}/${encodeURIComponent(targetQuiz)}`);
+        const json = await res.json();
+
+        if (json.status === 'success' && json.data) {
+          quizSettings = json.data;
+          MAX_VIOLATIONS = quizSettings.max_violations || 3;
+          const duration = quizSettings.duration_minutes || 60;
+          const now = new Date();
+
+          let scheduleMessage = `⏱️ Durasi Ujian: <b>${duration} Menit</b> | Batas Toleransi Pelanggaran: <b>${MAX_VIOLATIONS}x</b><br>`;
+          let isLocked = false;
+
+          // Cek Jam Buka (Start Time)
+          if (quizSettings.start_time) {
+            const startTime = new Date(quizSettings.start_time);
+            if (now < startTime) {
+              isLocked = true;
+              statusBox.className = 'alert alert-warning py-2 small mb-3';
+              scheduleMessage = `🔒 <b>KUIS BELUM DIBUKA!</b><br>Kuis dijadwalkan dibuka pada: <b>${startTime.toLocaleString('id-ID')}</b>. Mohon menunggu waktu ujian tiba.`;
+            } else {
+              scheduleMessage += `✅ Dibuka sejak: ${startTime.toLocaleTimeString('id-ID')}`;
+            }
+          }
+
+          // Cek Jam Tutup (End Time)
+          if (!isLocked && quizSettings.end_time) {
+            const endTime = new Date(quizSettings.end_time);
+            if (now > endTime) {
+              isLocked = true;
+              statusBox.className = 'alert alert-danger py-2 small mb-3';
+              scheduleMessage = `⛔ <b>KUIS TELAH DITUTUP!</b><br>Akses pengerjaan kuis berakhir pada: <b>${endTime.toLocaleString('id-ID')}</b>.`;
+            } else {
+              scheduleMessage += ` | Ditutup pada: <b>${endTime.toLocaleTimeString('id-ID')}</b>`;
+            }
+          }
+
+          if (isLocked) {
+            startBtn.disabled = true;
+            statusText.innerHTML = scheduleMessage;
+            return;
+          }
+
+          startBtn.disabled = false;
+          statusBox.className = 'alert alert-success py-2 small mb-3';
+          statusText.innerHTML = `🟢 <b>Kuis Sedang Dibuka!</b><br>${scheduleMessage}`;
+          return;
+        }
+      } catch (err) {
+        console.warn('Gagal ambil jadwal:', err);
+      }
+
+      startBtn.disabled = false;
+      statusBox.className = 'alert alert-secondary py-2 small mb-3';
+      statusText.innerHTML = `🟢 Kuis siap dikerjakan (Durasi default: 60 Menit | Maks Pelanggaran: ${MAX_VIOLATIONS}x).`;
+    }
+
+    // --- PROSES LOGIN PESERTA & MEMULAI UJIAN ---
     document.getElementById('login-form').addEventListener('submit', async (e) => {
       e.preventDefault();
       userNama = document.getElementById('input-nama').value.trim();
@@ -193,24 +305,97 @@
         return;
       }
 
+      // Pastikan jadwal masih valid
+      await checkScheduleInfo();
+      if (document.getElementById('btn-start-quiz').disabled) {
+        alert('Maaf, kuis belum dibuka atau sudah ditutup sesuai jadwal!');
+        return;
+      }
+
       document.getElementById('display-user').textContent = `Mahasiswa: ${userNama}`;
       document.getElementById('display-nim').textContent = `NIM: ${userNim}`;
       document.getElementById('display-quiz-id').textContent = `Kuis: ${quizId}`;
+      document.getElementById('violation-badge').textContent = `Pelanggaran: 0 / ${MAX_VIOLATIONS}`;
 
       loginModal.hide();
       document.getElementById('quiz-container').classList.remove('d-none');
       
-      // Mengaktifkan status login & proctoring
       isLoggedIn = true;
 
-      // Minta Layar Penuh (Fullscreen)
+      // Masuk Layar Penuh (Fullscreen)
       if (document.documentElement.requestFullscreen) {
         document.documentElement.requestFullscreen().catch(() => {});
       }
 
+      // Inisialisasi Timer Countdown
+      startQuizTimer();
+
       // Muat soal secara dinamis dari API backend
       await loadDynamicQuestions(quizId);
     });
+
+    // --- LOGIKA TIMER HITUNG MUNDUR (COUNTDOWN TIMER) ---
+    function startQuizTimer() {
+      let durationMinutes = 60;
+      if (quizSettings && quizSettings.duration_minutes) {
+        durationMinutes = parseInt(quizSettings.duration_minutes);
+      }
+
+      remainingSeconds = durationMinutes * 60;
+
+      // Jika ada waktu tutup (end_time), batasi agar tidak melebihi jam tutup
+      if (quizSettings && quizSettings.end_time) {
+        const endTime = new Date(quizSettings.end_time).getTime();
+        const now = Date.now();
+        const diffSeconds = Math.floor((endTime - now) / 1000);
+        if (diffSeconds > 0 && diffSeconds < remainingSeconds) {
+          remainingSeconds = diffSeconds;
+        }
+      }
+
+      updateTimerDisplay();
+
+      if (timerInterval) clearInterval(timerInterval);
+      timerInterval = setInterval(() => {
+        if (!isLoggedIn || isSubmitted) {
+          clearInterval(timerInterval);
+          return;
+        }
+
+        remainingSeconds--;
+        updateTimerDisplay();
+
+        if (remainingSeconds <= 0) {
+          clearInterval(timerInterval);
+          showViolationToast('WAKTU HABIS', 'Waktu pengerjaan ujian telah berakhir! Jawaban Anda dikirim secara otomatis.');
+          autoSubmitQuiz('TIME_EXPIRED');
+        }
+      }, 1000);
+    }
+
+    function updateTimerDisplay() {
+      const timerEl = document.getElementById('quiz-timer');
+      const hours = Math.floor(remainingSeconds / 3600);
+      const minutes = Math.floor((remainingSeconds % 3600) / 60);
+      const seconds = remainingSeconds % 60;
+
+      const pad = (n) => String(n).padStart(2, '0');
+      let displayStr = `${pad(minutes)}:${pad(seconds)}`;
+      if (hours > 0) {
+        displayStr = `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
+      }
+
+      timerEl.textContent = displayStr;
+
+      // Visual Warning saat waktu menipis
+      if (remainingSeconds <= 60) { // < 1 menit
+        timerEl.className = 'fw-bold font-monospace fs-5 text-danger pulse-danger';
+      } else if (remainingSeconds <= 300) { // < 5 menit
+        timerEl.className = 'fw-bold font-monospace fs-5 text-warning';
+      } else {
+        timerEl.className = 'fw-bold font-monospace fs-5 text-primary';
+      }
+    }
 
     // --- FUNGSI MEMUAT SOAL DINAMIS DARI BACKEND ---
     async function loadDynamicQuestions(targetQuizId) {
@@ -247,7 +432,6 @@
         fallbackAlertEl.classList.remove('d-none');
       }
 
-      // Render soal ke dalam form secara dinamis
       renderQuestions(questions);
 
       loadingEl.classList.add('d-none');
@@ -326,7 +510,6 @@
       violationCount++;
       document.getElementById('violation-badge').textContent = `Pelanggaran: ${violationCount} / ${MAX_VIOLATIONS}`;
       
-      // Tampilkan toast non-blocking di dalam halaman (bukan window.alert agar layar tidak blur)
       showViolationToast(`PELANGGARAN TERDETEKSI (${violationCount}/${MAX_VIOLATIONS})`, detail);
 
       try {
@@ -342,21 +525,26 @@
           })
         });
       } catch (err) {
-        console.warn('Gagal kirim log pelanggaran ke server:', err);
+        console.warn('Gagal kirim log pelanggaran:', err);
       }
 
       if (violationCount >= MAX_VIOLATIONS) {
-        autoSubmitQuiz();
+        autoSubmitQuiz('DISQUALIFIED');
       }
     }
 
-    function autoSubmitQuiz() {
+    function autoSubmitQuiz(reason = 'DISQUALIFIED') {
       if (!isLoggedIn || isSubmitted) return;
       isSubmitted = true;
+      if (timerInterval) clearInterval(timerInterval);
       disableForm();
-      showViolationToast('DISKUALIFIKASI', 'Pelanggaran mencapai batas maksimal! Ujian dihentikan dan jawaban dikirim otomatis.');
+
+      if (reason === 'DISQUALIFIED') {
+        showViolationToast('DISKUALIFIKASI', 'Pelanggaran mencapai batas maksimal! Ujian dihentikan dan jawaban dikirim otomatis.');
+      }
+
       setTimeout(() => {
-        submitData('DISQUALIFIED');
+        submitData(reason);
       }, 1000);
     }
 
@@ -367,9 +555,8 @@
       }
     }
 
-    // --- PENGIRIMAN JAWABAN SECARA DINAMIS (TIDAK HARDCODE) ---
+    // --- PENGIRIMAN JAWABAN SECARA DINAMIS DENGAN LAPORAN PELANGGARAN ---
     async function submitData(status = 'COMPLETED') {
-      // Ambil seluruh jawaban secara dinamis dari semua textarea yang ada
       const answers = {};
       const questionCards = document.querySelectorAll('.question-item');
 
@@ -378,7 +565,6 @@
         const qText = card.dataset.questionText || `Soal ${qNum}`;
         const textarea = card.querySelector('textarea');
         const answerVal = textarea ? textarea.value.trim() : '';
-        // Format key yang mudah dibaca di tabel rekap admin
         answers[`${qNum}. ${qText}`] = answerVal;
       });
 
@@ -391,23 +577,22 @@
             nim: userNim,
             quizId: quizId,
             answers: answers,
-            status: status
+            status: status,
+            violationCount: violationCount,
+            maxViolations: MAX_VIOLATIONS
           })
         });
 
         const resData = await res.json();
-        if (res.ok && resData.status === 'success') {
-          showFinishScreen(status, 'Jawaban Anda telah berhasil terkirim dan tersimpan di server.');
-        } else {
-          showFinishScreen(status, 'Jawaban tersimpan secara lokal. Catatan server: ' + (resData.message || 'Sukses'));
-        }
+        showFinishScreen(status, 'Jawaban dan rekap hasil pengerjaan Anda telah berhasil terkirim ke server.');
       } catch (err) {
         console.error('Error saat submit:', err);
-        showFinishScreen(status, 'Gagal terhubung ke server, namun respon tersimpan di cache ujian.');
+        showFinishScreen(status, 'Terkendala jaringan saat submit, data jawaban disimpan ke cache lokal.');
       }
     }
 
     function showFinishScreen(status, message) {
+      if (timerInterval) clearInterval(timerInterval);
       document.getElementById('quiz-container').classList.add('d-none');
       const finishContainer = document.getElementById('finish-container');
       finishContainer.classList.remove('d-none');
@@ -420,6 +605,17 @@
       const statusBadge = document.getElementById('finish-status');
       const finishIcon = document.getElementById('finish-icon');
       const finishTitle = document.getElementById('finish-title');
+      const violationReportEl = document.getElementById('finish-violation');
+
+      // Tampilkan Laporan Pelanggaran (Berapa dari Berapa)
+      violationReportEl.textContent = `${violationCount} / ${MAX_VIOLATIONS}`;
+      if (violationCount >= MAX_VIOLATIONS) {
+        violationReportEl.className = 'badge bg-danger fs-6 ms-1';
+      } else if (violationCount > 0) {
+        violationReportEl.className = 'badge bg-warning text-dark fs-6 ms-1';
+      } else {
+        violationReportEl.className = 'badge bg-success fs-6 ms-1';
+      }
 
       if (status === 'DISQUALIFIED') {
         finishIcon.textContent = '❌';
@@ -427,6 +623,12 @@
         finishTitle.textContent = 'Ujian Dihentikan (Diskualifikasi)';
         statusBadge.className = 'badge bg-danger';
         statusBadge.textContent = 'DISQUALIFIED';
+      } else if (status === 'TIME_EXPIRED') {
+        finishIcon.textContent = '⏰';
+        finishIcon.className = 'display-3 mb-3 text-warning';
+        finishTitle.textContent = 'Waktu Ujian Habis!';
+        statusBadge.className = 'badge bg-warning text-dark';
+        statusBadge.textContent = 'TIME_EXPIRED';
       } else {
         finishIcon.textContent = '✅';
         finishIcon.className = 'display-3 mb-3 text-success';
@@ -463,15 +665,15 @@
       }
     });
 
-    // Submit form manual oleh mahasiswa
     essayForm.addEventListener('submit', (e) => {
       e.preventDefault();
       if (!isLoggedIn || isSubmitted) return;
       
-      const confirmSubmit = confirm('Apakah Anda yakin ingin menyelesaikan ujian dan mengirim jawaban?');
+      const confirmSubmit = confirm('Apakah Anda yakin ingin menyelesaikan ujian dan mengirim jawaban sekarang?');
       if (!confirmSubmit) return;
 
       isSubmitted = true;
+      if (timerInterval) clearInterval(timerInterval);
       disableForm();
       submitData('SUBMITTED_MANUALLY');
     });
@@ -479,7 +681,7 @@
     // Listener Pindah Tab & Layar
     window.addEventListener('blur', () => {
       if (isLoggedIn && !isSubmitted) {
-        sendViolationLog('BLUR_WINDOW', 'Fokus layar ujian hilang atau keluar dari jendela.');
+        sendViolationLog('BLUR_WINDOW', 'Fokus layar ujian hilang atau keluar dari jendela browser.');
       }
     });
 
@@ -490,6 +692,4 @@
     });
   </script>
 </body>
-</html>
-
 </html>

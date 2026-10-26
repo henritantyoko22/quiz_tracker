@@ -2,29 +2,30 @@
 <html lang="id">
 <head>
   <meta charset="UTF-8">
-  <title>Admin Dashboard - Rekap Jawaban Ujian</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin Dashboard - Rekap & Pengaturan Ujian</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
 </head>
-<body class="bg-light p-4">
+<body class="bg-light p-3 p-md-4">
 
   <!-- Modal Login Admin -->
   <div class="modal fade" id="loginModal" data-bs-backdrop="static" tabindex="-1">
     <div class="modal-dialog modal-dialog-centered">
-      <div class="modal-content">
+      <div class="modal-content border-0 shadow">
         <div class="modal-header bg-dark text-white">
           <h5 class="modal-title fw-bold">Login Admin Ujian</h5>
         </div>
-        <div class="modal-body">
+        <div class="modal-body p-4">
           <form id="admin-login-form">
             <div class="mb-3">
-              <label class="form-label">Username</label>
-              <input type="text" id="admin-user" class="form-control" required>
+              <label class="form-label fw-bold">Username</label>
+              <input type="text" id="admin-user" class="form-control" placeholder="admin" required>
             </div>
             <div class="mb-3">
-              <label class="form-label">Password</label>
-              <input type="password" id="admin-pass" class="form-control" required>
+              <label class="form-label fw-bold">Password</label>
+              <input type="password" id="admin-pass" class="form-control" placeholder="••••••••" required>
             </div>
-            <button type="submit" class="btn btn-dark w-100 fw-bold">Login Admin</button>
+            <button type="submit" class="btn btn-dark w-100 fw-bold py-2">Login Admin</button>
           </form>
         </div>
       </div>
@@ -32,34 +33,157 @@
   </div>
 
   <!-- Content Dashboard -->
-  <div class="container d-none" id="admin-content">
-    <div class="d-flex justify-content-between align-items-center mb-4">
-      <h3 class="fw-bold m-0">Rekap Jawaban Ujian Mahasiswa</h3>
+  <div class="container-fluid d-none" id="admin-content" style="max-width: 1400px;">
+    <!-- Topbar Navigation -->
+    <div class="d-flex flex-wrap justify-content-between align-items-center mb-4 gap-2 border-bottom pb-3">
       <div>
-        <a href="/admin" class="btn btn-outline-dark btn-sm me-2">📝 Kelola / Impor Soal</a>
-        <button onclick="loadSubmissions()" class="btn btn-primary btn-sm me-2">🔄 Refresh Data</button>
-        <button onclick="logoutAdmin()" class="btn btn-outline-danger btn-sm">🚪 Logout</button>
+        <h3 class="fw-bold m-0 text-dark">Rekap Hasil & Monitoring Ujian Mahasiswa</h3>
+        <p class="text-muted small m-0">Laporan jawaban, rekap pelanggaran proctoring, dan pengaturan jadwal waktu ujian</p>
+      </div>
+      <div class="d-flex flex-wrap gap-2">
+        <button onclick="openScheduleModal()" class="btn btn-outline-primary btn-sm fw-bold">
+          ⏱️ Atur Jadwal & Timer Kuis
+        </button>
+        <a href="/admin" class="btn btn-outline-dark btn-sm fw-semibold">
+          📝 Kelola & Impor Soal
+        </a>
+        <a href="/quiz" target="_blank" class="btn btn-outline-success btn-sm">
+          👁️ Buka Halaman Kuis
+        </a>
+        <button onclick="loadSubmissions()" class="btn btn-primary btn-sm">
+          🔄 Refresh
+        </button>
+        <button onclick="logoutAdmin()" class="btn btn-danger btn-sm">
+          🚪 Logout
+        </button>
       </div>
     </div>
 
-    <div class="card p-3 shadow-sm">
+    <!-- Tabel Rekap Jawaban & Pelanggaran -->
+    <div class="card p-3 shadow-sm border-0">
       <div class="table-responsive">
         <table class="table table-hover align-middle">
           <thead class="table-dark">
             <tr>
-              <th>NIM</th>
-              <th>Nama Mahasiswa</th>
+              <th style="min-width: 110px;">NIM</th>
+              <th style="min-width: 150px;">Nama Mahasiswa</th>
               <th>Kuis</th>
-              <th>Jawaban Essay</th>
+              <th style="min-width: 160px;">Pelanggaran</th>
+              <th style="min-width: 280px;">Jawaban Essay</th>
               <th>Status</th>
-              <th>Penilaian (Grading)</th>
-              <th>Waktu Submit</th>
+              <th style="min-width: 200px;">Penilaian (Grading)</th>
+              <th style="min-width: 140px;">Waktu Submit</th>
             </tr>
           </thead>
           <tbody id="submission-table">
-            <tr><td colspan="7" class="text-center">Memuat data...</td></tr>
+            <tr><td colspan="8" class="text-center py-4">Memuat data...</td></tr>
           </tbody>
         </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL 1: ATUR JADWAL & TIMER KUIS (Dibuka jam berapa sampai berapa) -->
+  <div class="modal fade" id="scheduleModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+      <div class="modal-content border-0 shadow">
+        <div class="modal-header bg-primary text-white">
+          <h5 class="modal-title fw-bold">⏱️ Pengaturan Jadwal & Timer Kuis</h5>
+          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body p-4">
+          <div class="mb-3">
+            <label class="form-label fw-bold">Pilih / Masukkan ID Kuis</label>
+            <div class="input-group">
+              <input type="text" id="setting-quiz-id" class="form-control" value="ESSAY_WEB_DEV">
+              <button class="btn btn-outline-secondary" type="button" onclick="loadQuizSettings()">🔍 Muat Setting Kuis</button>
+            </div>
+            <div class="form-text small">Atur jadwal khusus untuk ID kuis ini (misal: <code>ESSAY_WEB_DEV</code>, <code>ESSAY_PEMROGRAMAN</code>).</div>
+          </div>
+
+          <!-- Preset Cepat -->
+          <div class="mb-3 p-2 bg-light border rounded">
+            <div class="small fw-bold text-muted mb-2">Preset Jadwal Cepat:</div>
+            <div class="d-flex flex-wrap gap-2">
+              <button type="button" class="btn btn-sm btn-outline-primary" onclick="presetSchedule('1_HOUR')">⚡ Buka Sekarang (1 Jam)</button>
+              <button type="button" class="btn btn-sm btn-outline-primary" onclick="presetSchedule('TODAY')">📅 Buka Hari Ini Penuh</button>
+              <button type="button" class="btn btn-sm btn-outline-secondary" onclick="presetSchedule('UNLIMITED')">♾️ Bebas Tanpa Batas Jam</button>
+            </div>
+          </div>
+
+          <form id="schedule-form">
+            <div class="row g-3 mb-3">
+              <div class="col-md-6">
+                <label class="form-label fw-bold">Kuis Dibuka Dari Jam (Mulai)</label>
+                <input type="datetime-local" id="setting-start-time" class="form-control">
+                <div class="form-text small">Peserta tidak bisa mulai sebelum jam ini (kosongkan jika buka sekarang).</div>
+              </div>
+              <div class="col-md-6">
+                <label class="form-label fw-bold">Kuis Ditutup Pada Jam (Selesai)</label>
+                <input type="datetime-local" id="setting-end-time" class="form-control">
+                <div class="form-text small">Peserta tidak bisa submit setelah jam ini (kosongkan jika tanpa batas tutup).</div>
+              </div>
+            </div>
+
+            <div class="row g-3 mb-4">
+              <div class="col-md-6">
+                <label class="form-label fw-bold">Durasi Timer Pengerjaan (Menit)</label>
+                <input type="number" id="setting-duration" class="form-control" min="5" max="300" value="60" required>
+                <div class="form-text small">Hitung mundur waktu pengerjaan di layar mahasiswa (misal: 60 menit).</div>
+              </div>
+              <div class="col-md-6">
+                <label class="form-label fw-bold">Toleransi Maksimal Pelanggaran</label>
+                <input type="number" id="setting-max-violations" class="form-control" min="1" max="10" value="3" required>
+                <div class="form-text small">Ujian otomatis didiskualifikasi jika pelanggaran mencapai batas ini.</div>
+              </div>
+            </div>
+
+            <div class="d-flex justify-content-between align-items-center pt-2 border-top">
+              <span id="save-setting-status" class="small text-muted"></span>
+              <div>
+                <button type="button" class="btn btn-secondary btn-sm me-2" data-bs-dismiss="modal">Tutup</button>
+                <button type="submit" class="btn btn-primary btn-sm fw-bold px-3">💾 Simpan Jadwal & Timer</button>
+              </div>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL 2: RINCIAN AUDIT LOG PELANGGARAN MAHASISWA -->
+  <div class="modal fade" id="violationDetailModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+      <div class="modal-content border-0 shadow">
+        <div class="modal-header bg-danger text-white">
+          <h5 class="modal-title fw-bold">🚨 Riwayat Log Pelanggaran Mahasiswa</h5>
+          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body p-4">
+          <div class="mb-3 p-2 bg-light rounded border">
+            <div><b>Nama Mahasiswa:</b> <span id="modal-log-nama">-</span></div>
+            <div><b>NIM:</b> <span id="modal-log-nim">-</span></div>
+            <div><b>Kuis:</b> <span id="modal-log-quiz">-</span></div>
+          </div>
+
+          <div class="table-responsive">
+            <table class="table table-sm table-bordered align-middle">
+              <thead class="table-secondary">
+                <tr>
+                  <th style="width: 140px;">Waktu</th>
+                  <th style="width: 150px;">Tipe Pelanggaran</th>
+                  <th>Detail Keterangan</th>
+                </tr>
+              </thead>
+              <tbody id="violation-log-table-body">
+                <tr><td colspan="3" class="text-center py-3">Memuat riwayat log...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Tutup</button>
+        </div>
       </div>
     </div>
   </div>
@@ -67,10 +191,12 @@
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
   <script>
     const IS_LOCAL = window.location.origin.includes('localhost') || window.location.origin.includes('127.0.0.1');
-    const API_BASE = (IS_LOCAL ? window.location.origin : 'https://quiz-tracker-seven.vercel.app') + '/v1/admin';
+    const API_BASE = IS_LOCAL ? window.location.origin : 'https://quiz-tracker-seven.vercel.app';
     const loginModal = new bootstrap.Modal(document.getElementById('loginModal'));
+    const scheduleModal = new bootstrap.Modal(document.getElementById('scheduleModal'));
+    const violationDetailModal = new bootstrap.Modal(document.getElementById('violationDetailModal'));
 
-    // Cek Cache Login Saat Pertama Dibuka
+    // Cek status login saat halaman pertama kali dibuka
     window.addEventListener('DOMContentLoaded', () => {
       const savedToken = localStorage.getItem('admin_token');
       if (savedToken) {
@@ -86,7 +212,7 @@
       const password = document.getElementById('admin-pass').value;
 
       try {
-        const res = await fetch(`${API_BASE}/login`, {
+        const res = await fetch(`${API_BASE}/v1/admin/login`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ username, password })
@@ -115,17 +241,18 @@
       window.location.reload();
     }
 
+    // --- REKAP DATA SUBMISSIONS & LAPORAN PELANGGARAN ---
     async function loadSubmissions() {
       const tbody = document.getElementById('submission-table');
-      tbody.innerHTML = '<tr><td colspan="7" class="text-center">Memuat data...</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="8" class="text-center py-4">Memuat data terbaru...</td></tr>';
 
       try {
-        const res = await fetch(`${API_BASE}/submissions`);
+        const res = await fetch(`${API_BASE}/v1/admin/submissions`);
         const result = await res.json();
 
         if (result.status === 'success' && Array.isArray(result.data)) {
           if (result.data.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted">Belum ada jawaban tersimpan.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted py-4">Belum ada jawaban tersimpan di server.</td></tr>';
             return;
           }
 
@@ -135,31 +262,61 @@
               const parsed = typeof sub.answers === 'string' ? JSON.parse(sub.answers) : sub.answers;
               if (parsed && typeof parsed === 'object') {
                 answersFormatted = Object.entries(parsed)
-                  .map(([q, a]) => `<b>${q}:</b> ${a || '<i>(kosong)</i>'}`).join('<br>');
+                  .map(([q, a]) => `<div class="mb-1"><b>${escapeHtml(q)}:</b> <span class="text-dark">${escapeHtml(a) || '<i>(kosong)</i>'}</span></div>`).join('');
               }
             } catch (e) {
-              answersFormatted = String(sub.answers || '-');
+              answersFormatted = escapeHtml(String(sub.answers || '-'));
             }
 
             const statusBadge = sub.status === 'DISQUALIFIED' 
               ? '<span class="badge bg-danger">Diskualifikasi</span>' 
-              : '<span class="badge bg-success">Selesai</span>';
+              : (sub.status === 'TIME_EXPIRED' ? '<span class="badge bg-warning text-dark">Waktu Habis</span>' : '<span class="badge bg-success">Selesai</span>');
 
             const waktu = sub.submitted_at ? new Date(sub.submitted_at).toLocaleString('id-ID') : '-';
 
+            // LAPORAN PELANGGARAN: BERAPA DARI BERAPA
+            const vCount = parseInt(sub.violation_count) || 0;
+            const maxV = parseInt(sub.max_violations) || 3;
+            
+            let violationBadgeClass = 'bg-success';
+            if (vCount > 0 && vCount < maxV) violationBadgeClass = 'bg-warning text-dark';
+            if (vCount >= maxV) violationBadgeClass = 'bg-danger';
+
+            const violationSummary = sub.violation_summary && sub.violation_summary !== '-' 
+              ? `<div class="text-muted mt-1" style="font-size: 11px;">${escapeHtml(sub.violation_summary)}</div>`
+              : '';
+
             return `
               <tr>
-                <td class="fw-bold">${sub.nim && sub.nim.trim() !== '' ? sub.nim : '<span class="text-muted">-</span>'}</td>
-                <td>${sub.nama && sub.nama.trim() !== '' ? sub.nama : '<span class="text-muted">-</span>'}</td>
-                <td><span class="badge bg-secondary">${sub.quiz_id || '-'}</span></td>
-                <td class="small" style="max-width: 250px;">${answersFormatted}</td>
+                <td class="fw-bold font-monospace">${sub.nim && sub.nim.trim() !== '' ? escapeHtml(sub.nim) : '<span class="text-muted">-</span>'}</td>
+                <td class="fw-semibold">${sub.nama && sub.nama.trim() !== '' ? escapeHtml(sub.nama) : '<span class="text-muted">-</span>'}</td>
+                <td><span class="badge bg-secondary">${escapeHtml(sub.quiz_id || '-')}</span></td>
+                
+                <!-- KOLOM LAPORAN PELANGGARAN (BERAPA DARI BERAPA) -->
+                <td>
+                  <div class="d-flex align-items-center gap-1">
+                    <span class="badge ${violationBadgeClass} fs-6 px-2 py-1">
+                      ${vCount} / ${maxV}
+                    </span>
+                    ${vCount >= maxV ? '<span class="badge bg-danger">Max</span>' : ''}
+                  </div>
+                  ${violationSummary}
+                  <button onclick="viewViolationLogs('${encodeURIComponent(sub.nama)}', '${encodeURIComponent(sub.nim)}', '${encodeURIComponent(sub.quiz_id)}')" 
+                          class="btn btn-xs btn-outline-danger mt-1 py-0 px-2" style="font-size: 11px;">
+                    🔍 Log Detail
+                  </button>
+                </td>
+
+                <td class="small" style="max-width: 320px; max-height: 150px; overflow-y: auto;">
+                  ${answersFormatted}
+                </td>
                 <td>${statusBadge}</td>
                 <td>
-                  <div class="input-group input-group-sm mb-1" style="width: 120px;">
-                    <input type="number" id="grade-${sub.id}" class="form-control" value="${sub.grade !== null && sub.grade !== undefined ? sub.grade : ''}" placeholder="Nilai">
+                  <div class="input-group input-group-sm mb-1" style="width: 110px;">
+                    <input type="number" id="grade-${sub.id}" class="form-control" value="${sub.grade !== null && sub.grade !== undefined ? sub.grade : ''}" placeholder="0-100">
                   </div>
-                  <input type="text" id="feedback-${sub.id}" class="form-control form-control-sm mb-1" value="${sub.feedback || ''}" placeholder="Catatan Dosen..." style="max-width: 180px;">
-                  <button onclick="saveGrade('${sub.id}')" class="btn btn-sm btn-outline-success w-100 fw-bold">💾 Simpan</button>
+                  <input type="text" id="feedback-${sub.id}" class="form-control form-control-sm mb-1" value="${escapeHtml(sub.feedback || '')}" placeholder="Catatan evaluasi..." style="max-width: 170px;">
+                  <button onclick="saveGrade('${sub.id}')" class="btn btn-sm btn-outline-success w-100 fw-bold">💾 Simpan Nilai</button>
                 </td>
                 <td class="small text-muted">${waktu}</td>
               </tr>
@@ -167,16 +324,163 @@
           }).join('');
         }
       } catch (err) {
-        tbody.innerHTML = `<tr><td colspan="7" class="text-center text-danger">Gagal memuat data: ${err.message}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="8" class="text-center text-danger py-4">Gagal memuat data: ${err.message}</td></tr>`;
       }
     }
+
+    // --- LIHAT AUDIT LOG DETAIL PELANGGARAN PER MAHASISWA ---
+    async function viewViolationLogs(namaEncoded, nimEncoded, quizIdEncoded) {
+      const nama = decodeURIComponent(namaEncoded);
+      const nim = decodeURIComponent(nimEncoded);
+      const quizId = decodeURIComponent(quizIdEncoded);
+
+      document.getElementById('modal-log-nama').textContent = nama;
+      document.getElementById('modal-log-nim').textContent = nim;
+      document.getElementById('modal-log-quiz').textContent = quizId;
+
+      const tbody = document.getElementById('violation-log-table-body');
+      tbody.innerHTML = '<tr><td colspan="3" class="text-center py-3">Mengambil riwayat log pelanggaran...</td></tr>';
+      
+      violationDetailModal.show();
+
+      try {
+        const res = await fetch(`${API_BASE}/v1/admin/violations/detail?userId=${encodeURIComponent(nama)}&nim=${encodeURIComponent(nim)}&quizId=${encodeURIComponent(quizId)}`);
+        const result = await res.json();
+
+        if (result.status === 'success' && Array.isArray(result.data)) {
+          if (result.data.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="3" class="text-center text-success py-3">✅ Bersih! Tidak ada rekaman pelanggaran dari mahasiswa ini.</td></tr>';
+            return;
+          }
+
+          tbody.innerHTML = result.data.map(log => {
+            const time = log.occurred_at ? new Date(log.occurred_at).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '-';
+            return `
+              <tr>
+                <td class="small font-monospace">${time}</td>
+                <td><span class="badge bg-danger">${escapeHtml(log.violation_type)}</span></td>
+                <td class="small text-dark">${escapeHtml(log.detail || '-')}</td>
+              </tr>
+            `;
+          }).join('');
+        }
+      } catch (err) {
+        tbody.innerHTML = `<tr><td colspan="3" class="text-center text-danger py-3">Gagal mengambil log: ${err.message}</td></tr>`;
+      }
+    }
+
+    // --- PENGATURAN JADWAL & TIMER KUIS ---
+    function openScheduleModal() {
+      scheduleModal.show();
+      loadQuizSettings();
+    }
+
+    async function loadQuizSettings() {
+      const quizId = document.getElementById('setting-quiz-id').value.trim();
+      const statusEl = document.getElementById('save-setting-status');
+      statusEl.textContent = 'Memuat data...';
+
+      try {
+        const res = await fetch(`${API_BASE}/v1/quiz/settings/${encodeURIComponent(quizId)}`);
+        const result = await res.json();
+
+        if (result.status === 'success' && result.data) {
+          const data = result.data;
+          document.getElementById('setting-duration').value = data.duration_minutes || 60;
+          document.getElementById('setting-max-violations').value = data.max_violations || 3;
+
+          if (data.start_time) {
+            const startD = new Date(data.start_time);
+            document.getElementById('setting-start-time').value = toLocalISOString(startD);
+          } else {
+            document.getElementById('setting-start-time').value = '';
+          }
+
+          if (data.end_time) {
+            const endD = new Date(data.end_time);
+            document.getElementById('setting-end-time').value = toLocalISOString(endD);
+          } else {
+            document.getElementById('setting-end-time').value = '';
+          }
+
+          statusEl.textContent = 'Pengaturan berhasil dimuat.';
+        }
+      } catch (err) {
+        statusEl.textContent = 'Menggunakan nilai bawaan.';
+      }
+    }
+
+    function toLocalISOString(date) {
+      const pad = (n) => String(n).padStart(2, '0');
+      return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+    }
+
+    function presetSchedule(type) {
+      const now = new Date();
+      if (type === '1_HOUR') {
+        document.getElementById('setting-start-time').value = toLocalISOString(now);
+        const end = new Date(now.getTime() + 60 * 60 * 1000);
+        document.getElementById('setting-end-time').value = toLocalISOString(end);
+        document.getElementById('setting-duration').value = 60;
+      } else if (type === 'TODAY') {
+        const start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 7, 0);
+        const end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59);
+        document.getElementById('setting-start-time').value = toLocalISOString(start);
+        document.getElementById('setting-end-time').value = toLocalISOString(end);
+        document.getElementById('setting-duration').value = 60;
+      } else if (type === 'UNLIMITED') {
+        document.getElementById('setting-start-time').value = '';
+        document.getElementById('setting-end-time').value = '';
+        document.getElementById('setting-duration').value = 60;
+      }
+    }
+
+    document.getElementById('schedule-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const quizId = document.getElementById('setting-quiz-id').value.trim();
+      const startTime = document.getElementById('setting-start-time').value;
+      const endTime = document.getElementById('setting-end-time').value;
+      const durationMinutes = document.getElementById('setting-duration').value;
+      const maxViolations = document.getElementById('setting-max-violations').value;
+      const statusEl = document.getElementById('save-setting-status');
+
+      statusEl.textContent = 'Menyimpan jadwal ke server...';
+
+      try {
+        const res = await fetch(`${API_BASE}/v1/admin/quiz/settings`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            quizId,
+            startTime: startTime ? new Date(startTime).toISOString() : null,
+            endTime: endTime ? new Date(endTime).toISOString() : null,
+            durationMinutes: parseInt(durationMinutes),
+            maxViolations: parseInt(maxViolations),
+            isActive: true
+          })
+        });
+
+        const data = await res.json();
+        if (data.status === 'success') {
+          alert('✅ ' + data.message);
+          statusEl.textContent = 'Tersimpan pada ' + new Date().toLocaleTimeString();
+          scheduleModal.hide();
+        } else {
+          alert('❌ Gagal: ' + data.message);
+          statusEl.textContent = 'Gagal menyimpan.';
+        }
+      } catch (err) {
+        alert('Gagal menghubungi server! ' + err.message);
+        statusEl.textContent = 'Terjadi kesalahan koneksi.';
+      }
+    });
 
     async function saveGrade(submissionId) {
       const gradeVal = document.getElementById(`grade-${submissionId}`).value;
       const feedbackVal = document.getElementById(`feedback-${submissionId}`).value;
 
       try {
-        const res = await fetch(`${API_BASE}/submissions/grade`, {
+        const res = await fetch(`${API_BASE}/v1/admin/submissions/grade`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -195,6 +499,18 @@
         alert('Terjadi kesalahan koneksi!');
       }
     }
+
+    function escapeHtml(str) {
+      if (!str) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    }
   </script>
 </body>
+</html>
+
 </html>
