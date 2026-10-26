@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ujian Online Terproteksi</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    body {
+      background-color: #f8f9fa;
+      user-select: none; /* Mencegah seleksi teks */
+      -webkit-user-select: none;
+    }
+    .quiz-card {
+      max-width: 700px;
+      margin: 30px auto;
+      border: none;
+      border-radius: 12px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+    }
+    #alert-toast {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      z-index: 9999;
+      display: none;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Toast Notifikasi Peringatan -->
+  <div id="alert-toast" class="toast align-items-center text-bg-danger border-0 show" role="alert">
+    <div class="d-flex">
+      <div class="toast-body" id="toast-message">
+        ⚠️ Pelanggaran terdeteksi!
+      </div>
+    </div>
+  </div>
+
+  <div class="container">
+    <div class="card quiz-card p-4">
+      <!-- Header Ujian -->
+      <div class="d-flex justify-content-between align-items-center border-bottom pb-3 mb-3">
+        <div>
+          <h5 class="fw-bold m-0" id="display-user">Peserta: -</h5>
+          <small class="text-muted" id="display-quiz">Kuis: -</small>
+        </div>
+        <button id="btn-fullscreen" class="btn btn-warning btn-sm fw-bold">
+          🖥️ Masuk Mode Fullscreen
+        </button>
+      </div>
+
+      <!-- Area Soal -->
+      <form id="quiz-form">
+        <div class="mb-4">
+          <p class="fw-semibold">1. Apa fungsi utama dari Express.js pada arsitektur backend Node.js?</p>
+          <div class="form-check mb-2">
+            <input class="form-check-input" type="radio" name="q1" id="q1a" value="A">
+            <label class="form-check-label" for="q1a">Mengatur basis data PostgreSQL secara langsung</label>
+          </div>
+          <div class="form-check mb-2">
+            <input class="form-check-input" type="radio" name="q1" id="q1b" value="B">
+            <label class="form-check-label" for="q1b">Menyediakan framework web server dan penanganan rute HTTP</label>
+          </div>
+          <div class="form-check mb-2">
+            <input class="form-check-input" type="radio" name="q1" id="q1c" value="C">
+            <label class="form-check-label" for="q1c">Menjalankan simulasi grafik di antarmuka browser</label>
+          </div>
+        </div>
+
+        <div class="mb-4">
+          <p class="fw-semibold">2. Event listener mana di JavaScript yang digunakan untuk mendeteksi saat pengguna berpindah tab browser?</p>
+          <div class="form-check mb-2">
+            <input class="form-check-input" type="radio" name="q2" id="q2a" value="A">
+            <label class="form-check-label" for="q2a">window.onblur</label>
+          </div>
+          <div class="form-check mb-2">
+            <input class="form-check-input" type="radio" name="q2" id="q2b" value="B">
+            <label class="form-check-label" for="q2b">document.visibilitychange</label>
+          </div>
+          <div class="form-check mb-2">
+            <input class="form-check-input" type="radio" name="q2" id="q2c" value="C">
+            <label class="form-check-label" for="q2c">document.oncopy</label>
+          </div>
+        </div>
+
+        <button type="submit" class="btn btn-success w-100 fw-bold">Selesai & Kirim Jawaban</button>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    // Konfigurasi Endpoint Backend Vercel
+    const API_URL = 'https://quiz-tracker-seven.vercel.app/v1/violations';
+    
+    // Identitas Sesi Ujian (Dapat disesuaikan dari query URL atau login)
+    const USER_ID = new URLSearchParams(window.location.search).get('user') || 'MHS_' + Math.floor(1000 + Math.random() * 9000);
+    const QUIZ_ID = new URLSearchParams(window.location.search).get('quiz') || 'QUIZ_WEB_DEV';
+
+    document.getElementById('display-user').textContent = `Peserta: ${USER_ID}`;
+    document.getElementById('display-quiz').textContent = `Kuis: ${QUIZ_ID}`;
+
+    // -------------------------------------------------------------
+    // MODUL PROCTORING (PENGIRIM LOG & ALERTS)
+    // -------------------------------------------------------------
+    function showAlert(msg) {
+      const toastEl = document.getElementById('alert-toast');
+      document.getElementById('toast-message').textContent = `⚠️ PERINGATAN: ${msg}`;
+      toastEl.style.display = 'block';
+      setTimeout(() => { toastEl.style.display = 'none'; }, 3500);
+    }
+
+    async function sendViolationLog(type, detail) {
+      showAlert(detail);
+      
+      const payload = {
+        userId: USER_ID,
+        quizId: QUIZ_ID,
+        type: type,
+        detail: detail,
+        timestamp: new Date().toISOString(),
+        url: window.location.href
+      };
+
+      try {
+        await fetch(API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+      } catch (err) {
+        console.error('Gagal mengirim log pelanggaran:', err);
+      }
+    }
+
+    // 1. Paksa / Deteksi Mode Fullscreen
+    const btnFullscreen = document.getElementById('btn-fullscreen');
+    btnFullscreen.addEventListener('click', () => {
+      if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen().catch(err => console.log(err));
+      }
+    });
+
+    document.addEventListener('fullscreenchange', () => {
+      if (!document.fullscreenElement) {
+        sendViolationLog('EXIT_FULLSCREEN', 'Keluar dari mode layar penuh (Fullscreen).');
+      }
+    });
+
+    // 2. Deteksi Pindah Tab
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) {
+        sendViolationLog('PINDAH_TAB', 'Terdeteksi berpindah ke tab browser lain.');
+      }
+    });
+
+    // 3. Deteksi Pindah Jendela / Fokus Layar
+    window.addEventListener('blur', () => {
+      sendViolationLog('PINDAH_APLIKASI', 'Fokus layar hilang! Membuka aplikasi lain.');
+    });
+
+    // 4. Blokir & Catat Klik Kanan
+    document.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      sendViolationLog('KLIK_KANAN', 'Mencoba membuka menu klik kanan.');
+    });
+
+    // 5. Blokir & Catat Copy/Paste/Cut/Shortcuts
+    document.addEventListener('copy', (e) => {
+      e.preventDefault();
+      sendViolationLog('COPY_TEXT', 'Mencoba menyalin (copy) teks kuis.');
+    });
+
+    document.addEventListener('paste', (e) => {
+      e.preventDefault();
+      sendViolationLog('PASTE_TEXT', 'Mencoba menempelkan (paste) teks ke halaman.');
+    });
+
+    document.addEventListener('keydown', (e) => {
+      // Blokir F12 (DevTools), Ctrl+U (View Source), Ctrl+Shift+I
+      if (
+        e.key === 'F12' || 
+        (e.ctrlKey && (e.key === 'u' || e.key === 'U' || e.key === 's' || e.key === 'S')) ||
+        (e.ctrlKey && e.shiftKey && (e.key === 'I' || e.key === 'i' || e.key === 'J' || e.key === 'j'))
+      ) {
+        e.preventDefault();
+        sendViolationLog('DEVTOOLS_SHORTCUT', 'Mencoba membuka Developer Tools / Source Code.');
+      }
+    });
+
+    // Submit Form Kuis
+    document.getElementById('quiz-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      alert('Ujian selesai! Jawaban telah berhasil dikirim.');
+      window.location.reload();
+    });
+  </script>
+</body>
+</html>

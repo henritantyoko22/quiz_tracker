@@ -16,6 +16,10 @@ app.get('/dashboard', (req, res) => {
   res.sendFile(path.join(__dirname, 'dashboard.html'));
 });
 
+app.get('/quiz', (req, res) => {
+  res.sendFile(path.join(__dirname, 'quiz.html'));
+});
+
 // 1. Endpoint Simpan Log Pelanggaran dari Chrome Extension
 app.post('/v1/violations', async (req, res) => {
   const { userId, quizId, type, detail, timestamp, url } = req.body;
