@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "Quiz Violation Tracker",
+  "version": "1.0.0",
+  "description": "Ekstensi untuk mendeteksi indikasi kecurangan saat kuis online.",
+  "permissions": [
+    "storage",
+    "idle"
+  ],
+  "host_permissions": [
+    "https://quiz-tracker-seven.vercel.app/*"
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

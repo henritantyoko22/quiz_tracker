@@ -9,6 +9,13 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
+const path = require('path');
+
+// Rute untuk menyajikan halaman dashboard
+app.get('/dashboard', (req, res) => {
+  res.sendFile(path.join(__dirname, 'dashboard.html'));
+});
+
 // 1. Endpoint Simpan Log Pelanggaran dari Chrome Extension
 app.post('/v1/violations', async (req, res) => {
   const { userId, quizId, type, detail, timestamp, url } = req.body;
