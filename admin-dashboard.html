@@ -2,7 +2,7 @@
 <html lang="id">
 <head>
   <meta charset="UTF-8">
-  <title>Admin - Rekap Jawaban Ujian</title>
+  <title>Admin Dashboard - Rekap Jawaban Ujian</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
 </head>
 <body class="bg-light p-4">
@@ -31,7 +31,7 @@
     </div>
   </div>
 
-  <!-- Dashboard Jawaban -->
+  <!-- Content Dashboard -->
   <div class="container d-none" id="admin-content">
     <div class="d-flex justify-content-between align-items-center mb-4">
       <h3 class="fw-bold m-0">Rekap Jawaban Ujian Mahasiswa</h3>
@@ -51,11 +51,12 @@
               <th>Kuis</th>
               <th>Jawaban Essay</th>
               <th>Status</th>
+              <th>Penilaian (Grading)</th>
               <th>Waktu Submit</th>
             </tr>
           </thead>
           <tbody id="submission-table">
-            <tr><td colspan="6" class="text-center">Memuat data...</td></tr>
+            <tr><td colspan="7" class="text-center">Memuat data...</td></tr>
           </tbody>
         </table>
       </div>
@@ -67,7 +68,7 @@
     const API_BASE = 'https://quiz-tracker-seven.vercel.app/v1/admin';
     const loginModal = new bootstrap.Modal(document.getElementById('loginModal'));
 
-    // 1. CEK CACHE LOGIN (localStorage)
+    // Cek Cache Login Saat Pertama Dibuka
     window.addEventListener('DOMContentLoaded', () => {
       const savedToken = localStorage.getItem('admin_token');
       if (savedToken) {
@@ -77,7 +78,6 @@
       }
     });
 
-    // 2. PROSES LOGIN & SIMPAN CACHE
     document.getElementById('admin-login-form').addEventListener('submit', async (e) => {
       e.preventDefault();
       const username = document.getElementById('admin-user').value;
@@ -92,7 +92,6 @@
         const data = await res.json();
 
         if (data.status === 'success') {
-          // Simpan token ke LocalStorage
           localStorage.setItem('admin_token', data.token);
           loginModal.hide();
           showDashboard();
@@ -114,10 +113,9 @@
       window.location.reload();
     }
 
-    // 3. LOAD & RENDER SUBMISSIONS
     async function loadSubmissions() {
       const tbody = document.getElementById('submission-table');
-      tbody.innerHTML = '<tr><td colspan="6" class="text-center">Memuat data...</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="7" class="text-center">Memuat data...</td></tr>';
 
       try {
         const res = await fetch(`${API_BASE}/submissions`);
@@ -125,7 +123,7 @@
 
         if (result.status === 'success' && Array.isArray(result.data)) {
           if (result.data.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted">Belum ada jawaban tersimpan.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted">Belum ada jawaban tersimpan.</td></tr>';
             return;
           }
 
@@ -145,24 +143,54 @@
               ? '<span class="badge bg-danger">Diskualifikasi</span>' 
               : '<span class="badge bg-success">Selesai</span>';
 
-            const waktu = sub.submitted_at 
-              ? new Date(sub.submitted_at).toLocaleString('id-ID') 
-              : '-';
+            const waktu = sub.submitted_at ? new Date(sub.submitted_at).toLocaleString('id-ID') : '-';
 
             return `
               <tr>
                 <td class="fw-bold">${sub.nim && sub.nim.trim() !== '' ? sub.nim : '<span class="text-muted">-</span>'}</td>
                 <td>${sub.nama && sub.nama.trim() !== '' ? sub.nama : '<span class="text-muted">-</span>'}</td>
                 <td><span class="badge bg-secondary">${sub.quiz_id || '-'}</span></td>
-                <td class="small" style="max-width: 300px;">${answersFormatted}</td>
+                <td class="small" style="max-width: 250px;">${answersFormatted}</td>
                 <td>${statusBadge}</td>
+                <td>
+                  <div class="input-group input-group-sm mb-1" style="width: 120px;">
+                    <input type="number" id="grade-${sub.id}" class="form-control" value="${sub.grade !== null && sub.grade !== undefined ? sub.grade : ''}" placeholder="Nilai">
+                  </div>
+                  <input type="text" id="feedback-${sub.id}" class="form-control form-control-sm mb-1" value="${sub.feedback || ''}" placeholder="Catatan Dosen..." style="max-width: 180px;">
+                  <button onclick="saveGrade('${sub.id}')" class="btn btn-sm btn-outline-success w-100 fw-bold">💾 Simpan</button>
+                </td>
                 <td class="small text-muted">${waktu}</td>
               </tr>
             `;
           }).join('');
         }
       } catch (err) {
-        tbody.innerHTML = `<tr><td colspan="6" class="text-center text-danger">Gagal memuat data: ${err.message}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="7" class="text-center text-danger">Gagal memuat data: ${err.message}</td></tr>`;
+      }
+    }
+
+    async function saveGrade(submissionId) {
+      const gradeVal = document.getElementById(`grade-${submissionId}`).value;
+      const feedbackVal = document.getElementById(`feedback-${submissionId}`).value;
+
+      try {
+        const res = await fetch(`${API_BASE}/submissions/grade`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            submissionId: submissionId,
+            grade: gradeVal,
+            feedback: feedbackVal
+          })
+        });
+        const data = await res.json();
+        if (data.status === 'success') {
+          alert('Nilai berhasil disimpan!');
+        } else {
+          alert('Gagal menyimpan: ' + data.message);
+        }
+      } catch (err) {
+        alert('Terjadi kesalahan koneksi!');
       }
     }
   </script>

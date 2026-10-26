@@ -13,7 +13,7 @@
 </head>
 <body>
 
-  <!-- 1. MODAL LOGIN MAHASISWA -->
+  <!-- Modal Login Peserta -->
   <div class="modal fade" id="loginModal" data-bs-backdrop="static" data-bs-keyboard="false" tabindex="-1">
     <div class="modal-dialog modal-dialog-centered">
       <div class="modal-content">
@@ -24,11 +24,11 @@
           <form id="login-form">
             <div class="mb-3">
               <label class="form-label fw-bold">Nama Lengkap Mahasiswa</label>
-              <input type="text" id="input-nama" class="form-control" placeholder="Contoh: Budi Santoso" required>
+              <input type="text" id="input-nama" class="form-control" placeholder="Contoh: Henri Tantyoko" required>
             </div>
             <div class="mb-3">
               <label class="form-label fw-bold">NIM (Nomor Induk Mahasiswa)</label>
-              <input type="text" id="input-nim" class="form-control" placeholder="Contoh: 24060120140001" required>
+              <input type="text" id="input-nim" class="form-control" placeholder="Contoh: 1231241412" required>
             </div>
             <button type="submit" class="btn btn-primary w-100 fw-bold">Mulai Ujian</button>
           </form>
@@ -37,7 +37,7 @@
     </div>
   </div>
 
-  <!-- 2. AREA HALAMAN UJIAN -->
+  <!-- Area Ujian -->
   <div class="container d-none" id="quiz-container">
     <div class="card card-custom p-4">
       <div class="d-flex justify-content-between align-items-center border-bottom pb-3 mb-3">
@@ -49,21 +49,21 @@
       </div>
 
       <div class="alert alert-warning py-2 small fw-bold">
-        ⚠️ PERINGATAN: Dilarang Copy-Paste, memindahkan tab, atau keluar dari fullscreen!
+        ⚠️ PERINGATAN: Dilarang Copy-Paste, pindah tab, atau keluar dari layar penuh!
       </div>
 
       <form id="essay-form">
         <div class="mb-4">
-          <label class="fw-bold mb-2">1. Jelaskan bagaimana arsitektur Express.js mengelola middleware dan routing HTTP!</label>
-          <textarea name="essay_1" class="form-control no-copy-input" rows="4" placeholder="Ketik jawaban essay Anda di sini..." required></textarea>
+          <label class="fw-bold mb-2">1. Jelaskan arsitektur middleware pada Express.js!</label>
+          <textarea name="essay_1" class="form-control no-copy-input" rows="4" placeholder="Ketik jawaban essay Anda..." required></textarea>
         </div>
 
         <div class="mb-4">
-          <label class="fw-bold mb-2">2. Mengapa proteksi sisi kuis berbasis website lebih aman dibandingkan hanya mengandalkan Chrome Extension?</label>
-          <textarea name="essay_2" class="form-control no-copy-input" rows="4" placeholder="Ketik jawaban essay Anda di sini..." required></textarea>
+          <label class="fw-bold mb-2">2. Mengapa proteksi kuis berbasis website lebih efektif dibandingkan Chrome Extension?</label>
+          <textarea name="essay_2" class="form-control no-copy-input" rows="4" placeholder="Ketik jawaban essay Anda..." required></textarea>
         </div>
 
-        <button type="submit" class="btn btn-success w-100 fw-bold">Kirim Jawaban Essay</button>
+        <button type="submit" id="btn-submit" class="btn btn-success w-100 fw-bold">Kirim Jawaban Essay</button>
       </form>
     </div>
   </div>
@@ -78,71 +78,53 @@
     let violationCount = 0;
     let isSubmitted = false;
 
-    // Tampilkan Modal Login Pertama Kali
     const loginModal = new bootstrap.Modal(document.getElementById('loginModal'));
     window.addEventListener('DOMContentLoaded', () => loginModal.show());
 
     document.getElementById('login-form').addEventListener('submit', (e) => {
       e.preventDefault();
-      userNama = document.getElementById('input-nama').value;
-      userNim = document.getElementById('input-nim').value;
+      userNama = document.getElementById('input-nama').value.trim();
+      userNim = document.getElementById('input-nim').value.trim();
 
       document.getElementById('display-user').textContent = `Mahasiswa: ${userNama}`;
       document.getElementById('display-nim').textContent = `NIM: ${userNim}`;
 
       loginModal.hide();
       document.getElementById('quiz-container').classList.remove('d-none');
-      document.documentElement.requestFullscreen().catch(() => {});
+      
+      // Minta Layar Penuh
+      if (document.documentElement.requestFullscreen) {
+        document.documentElement.requestFullscreen().catch(() => {});
+      }
     });
 
-    // --- PROTEKSI COPY-PASTE KHUSUS TEXTAREA ESSAY ---
-    document.querySelectorAll('.no-copy-input').forEach(textarea => {
-      // Blokir Paste
-      textarea.addEventListener('paste', (e) => {
-        e.preventDefault();
-        sendViolationLog('PASTE_ESSAY', 'Mencoba menempelkan (paste) teks ke dalam jawaban essay.');
-      });
-      // Blokir Copy / Cut
-      textarea.addEventListener('copy', (e) => {
-        e.preventDefault();
-        sendViolationLog('COPY_ESSAY', 'Mencoba menyalin (copy) teks dari jawaban essay.');
-      });
-      textarea.addEventListener('cut', (e) => e.preventDefault());
+    // Proteksi Teks Essay
+    document.querySelectorAll('.no-copy-input').forEach(el => {
+      el.addEventListener('paste', (e) => { e.preventDefault(); if (!isSubmitted) sendViolationLog('PASTE_ESSAY', 'Mencoba menempelkan teks.'); });
+      el.addEventListener('copy', (e) => { e.preventDefault(); if (!isSubmitted) sendViolationLog('COPY_ESSAY', 'Mencoba menyalin teks.'); });
+      el.addEventListener('cut', (e) => e.preventDefault());
     });
-
-    async function loadQuestions(quizId) {
-    try {
-        const res = await fetch(`https://quiz-tracker-seven.vercel.app/v1/quiz/questions/${quizId}`);
-        const result = await res.json();
-        
-        if (result.status === 'success') {
-        const container = document.getElementById('essay-form');
-        // Render elemen textarea untuk setiap soal essay secara dinamis
-        }
-    } catch (err) {
-        console.error('Gagal memuat soal:', err);
-    }
-    }
 
     async function sendViolationLog(type, detail) {
       if (isSubmitted) return;
 
       violationCount++;
       document.getElementById('violation-badge').textContent = `Pelanggaran: ${violationCount} / ${MAX_VIOLATIONS}`;
-      alert(`⚠️ PELANGGARAN TERDETEKSI: ${detail}`);
+      alert(`⚠️ PELANGGARAN TERDETEKSI (${violationCount}/${MAX_VIOLATIONS}): ${detail}`);
 
-      await fetch(API_VIOLATION_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          userId: userNama,
-          quizId: 'ESSAY_WEB_DEV',
-          type: type,
-          detail: `[NIM: ${userNim}] ${detail}`,
-          timestamp: new Date().toISOString(),
-          url: window.location.href
-        })
-      });
+      try {
+        await fetch(API_VIOLATION_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userId: userNama,
+            quizId: 'ESSAY_WEB_DEV',
+            type: type,
+            detail: `[NIM: ${userNim}] ${detail}`,
+            url: window.location.href
+          })
+        });
+      } catch (err) {}
 
       if (violationCount >= MAX_VIOLATIONS) {
         autoSubmitQuiz();
@@ -152,47 +134,62 @@
     function autoSubmitQuiz() {
       if (isSubmitted) return;
       isSubmitted = true;
-      alert('Pelanggaran mencapai batas maksimal! Jawaban Anda disubmit otomatis.');
+      disableForm();
+      alert('Pelanggaran mencapai batas maksimal! Ujian dihentikan dan jawaban dikirim otomatis.');
       submitData('DISQUALIFIED');
+    }
+
+    function disableForm() {
+      const elements = document.getElementById('essay-form').elements;
+      for (let i = 0; i < elements.length; i++) {
+        elements[i].disabled = true;
+      }
     }
 
     async function submitData(status = 'COMPLETED') {
       const formData = new FormData(document.getElementById('essay-form'));
       const answers = {
-        essay_1: formData.get('essay_1'),
-        essay_2: formData.get('essay_2')
+        essay_1: formData.get('essay_1') || '',
+        essay_2: formData.get('essay_2') || ''
       };
 
-      await fetch(API_SUBMIT_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          userId: userNama,
-          nim: userNim,
-          quizId: 'ESSAY_WEB_DEV',
-          answers: answers,
-          status: status
-        })
-      });
+      try {
+        await fetch(API_SUBMIT_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userId: userNama,
+            nim: userNim,
+            quizId: 'ESSAY_WEB_DEV',
+            answers: answers,
+            status: status
+          })
+        });
 
-      alert('Ujian Selesai! Terima kasih.');
-      window.location.reload();
+        // Lepas Listener Proctoring
+        window.removeEventListener('blur', handleBlur);
+        document.removeEventListener('visibilitychange', handleVisibility);
+
+        alert('Ujian Selesai! Terima kasih.');
+        window.location.href = 'about:blank';
+      } catch (err) {
+        alert('Gagal mengirim jawaban: ' + err.message);
+      }
     }
 
     document.getElementById('essay-form').addEventListener('submit', (e) => {
-        e.preventDefault();
-        if (isSubmitted) return; // Mencegah submit ganda
-        isSubmitted = true;     
-        submitData('SUBMITTED_MANUALLY');
+      e.preventDefault();
+      if (isSubmitted) return;
+      isSubmitted = true;
+      disableForm();
+      submitData('SUBMITTED_MANUALLY');
     });
 
-    // Event Listener Pindah Tab / Screen Blur
-    document.addEventListener('visibilitychange', () => {
-      if (document.hidden && !isSubmitted) sendViolationLog('PINDAH_TAB', 'Terdeteksi berpindah tab browser.');
-    });
-    window.addEventListener('blur', () => {
-      if (!isSubmitted) sendViolationLog('BLUR_WINDOW', 'Fokus jendela ujian hilang.');
-    });
+    const handleVisibility = () => { if (document.hidden && !isSubmitted) sendViolationLog('PINDAH_TAB', 'Berpindah tab browser.'); };
+    const handleBlur = () => { if (!isSubmitted) sendViolationLog('BLUR_WINDOW', 'Fokus layar ujian hilang.'); };
+
+    document.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('blur', handleBlur);
   </script>
 </body>
 </html>
