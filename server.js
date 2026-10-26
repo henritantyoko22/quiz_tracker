@@ -219,6 +219,35 @@ app.post('/v1/admin/questions/import', async (req, res) => {
   }
 });
 
+// 1. Endpoint Login Admin (Sederhana)
+app.post('/v1/admin/login', (req, res) => {
+  const { username, password } = req.body;
+  // Ganti username dan password admin sesuai kebutuhanmu
+  if (username === 'admin' && password === 'admin123') {
+    res.json({ status: 'success', token: 'secret-admin-token' });
+  } else {
+    res.status(401).json({ status: 'error', message: 'Username atau password salah!' });
+  }
+});
+
+// 2. Endpoint Mengambil Daftar Jawaban Mahasiswa
+app.get('/v1/admin/submissions', async (req, res) => {
+  try {
+    const result = await db.query(
+      `SELECT id, user_id AS nama, nim, quiz_id, answers, status, submitted_at 
+       FROM quiz_submissions 
+       ORDER BY submitted_at DESC`
+    );
+    res.json({ status: 'success', data: result.rows });
+  } catch (err) {
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+});
+
+app.get('/admin-dashboard', (req, res) => {
+  res.sendFile(path.join(__dirname, 'admin-dashboard.html'));
+});
+
 app.listen(PORT, () => {
   console.log(`Server API berjalan di port ${PORT}`);
 });

@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <title>Admin - Jawaban Ujian Mahasiswa</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body class="bg-light p-4">
+
+  <!-- Modal Login Admin -->
+  <div class="modal fade" id="loginModal" data-bs-backdrop="static" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-content">
+        <div class="modal-header bg-dark text-white">
+          <h5 class="modal-title fw-bold">Login Admin Ujian</h5>
+        </div>
+        <div class="modal-body">
+          <form id="admin-login-form">
+            <div class="mb-3">
+              <label class="form-label">Username</label>
+              <input type="text" id="admin-user" class="form-control" required>
+            </div>
+            <div class="mb-3">
+              <label class="form-label">Password</label>
+              <input type="password" id="admin-pass" class="form-control" required>
+            </div>
+            <button type="submit" class="btn btn-dark w-100 fw-bold">Login Admin</button>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Dashboard Jawaban -->
+  <div class="container d-none" id="admin-content">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+      <h3 class="fw-bold">Rekap Jawaban Ujian Mahasiswa</h3>
+      <button onclick="loadSubmissions()" class="btn btn-primary btn-sm">🔄 Refresh Data</button>
+    </div>
+
+    <div class="card p-3 shadow-sm">
+      <div class="table-responsive">
+        <table class="table table-hover align-middle">
+          <thead class="table-dark">
+            <tr>
+              <th>NIM</th>
+              <th>Nama Mahasiswa</th>
+              <th>Kuis</th>
+              <th>Jawaban Essay</th>
+              <th>Status</th>
+              <th>Waktu Submit</th>
+            </tr>
+          </thead>
+          <tbody id="submission-table">
+            <tr><td colspan="6" class="text-center">Memuat data...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+  <script>
+    const API_BASE = 'https://quiz-tracker-seven.vercel.app/v1/admin';
+    const loginModal = new bootstrap.Modal(document.getElementById('loginModal'));
+
+    window.addEventListener('DOMContentLoaded', () => loginModal.show());
+
+    document.getElementById('admin-login-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const username = document.getElementById('admin-user').value;
+      const password = document.getElementById('admin-pass').value;
+
+      const res = await fetch(`${API_BASE}/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password })
+      });
+      const data = await res.json();
+
+      if (data.status === 'success') {
+        loginModal.hide();
+        document.getElementById('admin-content').classList.remove('d-none');
+        loadSubmissions();
+      } else {
+        alert('Login gagal! ' + data.message);
+      }
+    });
+
+    async function loadSubmissions() {
+      const res = await fetch(`${API_BASE}/submissions`);
+      const result = await res.json();
+      const tbody = document.getElementById('submission-table');
+
+      if (result.status === 'success') {
+        tbody.innerHTML = result.data.map(sub => {
+          let answersFormatted = '';
+          try {
+            const parsed = typeof sub.answers === 'string' ? JSON.parse(sub.answers) : sub.answers;
+            answersFormatted = Object.entries(parsed)
+              .map(([q, a]) => `<b>${q}:</b> ${a}`).join('<br>');
+          } catch(e) {
+            answersFormatted = JSON.stringify(sub.answers);
+          }
+
+          const statusBadge = sub.status === 'DISQUALIFIED' 
+            ? '<span class="badge bg-danger">Diskualifikasi</span>' 
+            : '<span class="badge bg-success">Selesai</span>';
+
+          return `
+            <tr>
+              <td class="fw-bold">${sub.nim}</td>
+              <td>${sub.nama}</td>
+              <td><span class="badge bg-secondary">${sub.quiz_id}</span></td>
+              <td class="small" style="max-width: 300px;">${answersFormatted}</td>
+              <td>${statusBadge}</td>
+              <td class="small text-muted">${new Date(sub.submitted_at).toLocaleString('id-ID')}</td>
+            </tr>
+          `;
+        }).join('');
+      }
+    }
+  </script>
+</body>
+</html>
