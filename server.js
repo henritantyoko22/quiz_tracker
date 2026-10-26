@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
@@ -13,6 +14,21 @@ app.use(express.static(__dirname));
 // 1. ENDPOINT KUIS (QUESTIONS & SUBMIT)
 // -------------------------------------------------------------
 
+// Mengambil daftar quizId yang tersedia
+app.get('/v1/quiz/list', async (req, res) => {
+  try {
+    const result = await db.query(
+      `SELECT DISTINCT quiz_id, COUNT(*) AS total_questions 
+       FROM quiz_questions 
+       GROUP BY quiz_id 
+       ORDER BY quiz_id ASC`
+    );
+    res.json({ status: 'success', data: result.rows });
+  } catch (err) {
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+});
+
 // mengambil daftar soal essay
 app.get('/v1/quiz/questions/:quizId', async (req, res) => {
   const { quizId } = req.params;
@@ -21,7 +37,7 @@ app.get('/v1/quiz/questions/:quizId', async (req, res) => {
       `SELECT id, question_text, question_type 
        FROM quiz_questions 
        WHERE quiz_id = $1 
-       ORDER BY created_at ASC`,
+       ORDER BY id ASC`,
       [quizId]
     );
     res.json({ status: 'success', quizId, data: result.rows });
@@ -129,6 +145,7 @@ app.post('/v1/admin/questions/import', async (req, res) => {
 
 // Routing Halaman Static
 app.get('/quiz', (req, res) => res.sendFile(path.join(__dirname, 'quiz.html')));
+app.get('/admin', (req, res) => res.sendFile(path.join(__dirname, 'admin.html')));
 app.get('/admin-dashboard', (req, res) => res.sendFile(path.join(__dirname, 'admin-dashboard.html')));
 
 const PORT = process.env.PORT || 3000;

@@ -2,53 +2,185 @@
 <html lang="id">
 <head>
   <meta charset="UTF-8">
-  <title>Admin Dashboard - Impor Soal Kuis</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin - Kelola & Impor Soal Kuis</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
 </head>
 <body class="p-4 bg-light">
 
-  <div class="container" style="max-width: 800px;">
-    <h3 class="fw-bold mb-4">Panel Admin: Impor Soal Ujian</h3>
+  <div class="container" style="max-width: 850px;">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+      <div>
+        <h3 class="fw-bold m-0">Panel Admin: Kelola & Impor Soal Ujian</h3>
+        <p class="text-muted small m-0">Atur bank soal dinamis untuk berbagai ID Kuis</p>
+      </div>
+      <div>
+        <a href="/admin-dashboard" class="btn btn-outline-dark btn-sm me-2">📊 Rekap Jawaban</a>
+        <a href="/quiz" target="_blank" class="btn btn-outline-primary btn-sm">📝 Buka Kuis</a>
+      </div>
+    </div>
 
-    <div class="card p-4 shadow-sm mb-4">
-      <h5 class="fw-bold">1. Impor Soal via Format JSON</h5>
-      <p class="text-muted small">Format JSON harus berisi array objek soal essay.</p>
+    <!-- Card 1: Form Impor Soal -->
+    <div class="card p-4 shadow-sm mb-4 border-0">
+      <h5 class="fw-bold mb-3">1. Impor Soal Baru (Format JSON)</h5>
       
       <div class="mb-3">
-        <label class="form-label">ID Kuis / Ujian</label>
-        <input type="text" id="admin-quiz-id" class="form-control" value="ESSAY_PEMROGRAMAN">
+        <label class="form-label fw-bold">ID Kuis / Ujian</label>
+        <div class="input-group">
+          <input type="text" id="admin-quiz-id" class="form-control" value="ESSAY_WEB_DEV">
+          <button class="btn btn-outline-secondary" type="button" onclick="loadExistingQuestions()">🔍 Cek Soal Saat Ini</button>
+        </div>
+        <div class="form-text">Gunakan ID ini saat peserta login atau pada URL <code>quiz.html?quizId=...</code></div>
+      </div>
+
+      <div class="mb-2 d-flex gap-2">
+        <span class="small text-muted align-self-center">Template Cepat:</span>
+        <button type="button" class="btn btn-sm btn-light border" onclick="setTemplate('WEB_DEV')">Web Dev</button>
+        <button type="button" class="btn btn-sm btn-light border" onclick="setTemplate('PEMROGRAMAN')">Pemrograman</button>
+        <button type="button" class="btn btn-sm btn-light border" onclick="setTemplate('DATABASE')">Basis Data</button>
       </div>
 
       <div class="mb-3">
-        <label class="form-label">Data JSON Soal</label>
-        <textarea id="json-input" class="form-control" rows="6" placeholder='[
-  { "id": 1, "question": "Jelaskan konsep dasar Event Loop pada Node.js!" },
-  { "id": 2, "question": "Apa fungsi middleware pada Express.js?" }
+        <label class="form-label fw-bold">Data JSON Soal</label>
+        <textarea id="json-input" class="form-control font-monospace" rows="8" placeholder='[
+  { "question": "Jelaskan konsep dasar Event Loop pada Node.js!" },
+  { "question": "Apa fungsi middleware pada Express.js?" }
 ]'></textarea>
       </div>
 
-      <button id="btn-import-json" class="btn btn-primary fw-bold">🚀 Upload & Impor Soal</button>
+      <div class="d-flex justify-content-between align-items-center">
+        <button id="btn-import-json" class="btn btn-primary fw-bold">🚀 Upload & Simpan Soal</button>
+        <span id="import-status" class="small text-muted"></span>
+      </div>
+    </div>
+
+    <!-- Card 2: Preview Soal yang Ada di Database -->
+    <div class="card p-4 shadow-sm border-0 mb-4">
+      <div class="d-flex justify-content-between align-items-center mb-3">
+        <h5 class="fw-bold m-0">2. Daftar Soal Tersimpan untuk Kuis Ini</h5>
+        <button class="btn btn-sm btn-outline-primary" onclick="loadExistingQuestions()">🔄 Refresh</button>
+      </div>
+      <div id="existing-questions-list">
+        <p class="text-muted small">Klik <b>"Cek Soal Saat Ini"</b> untuk melihat soal yang tersimpan di server.</p>
+      </div>
     </div>
   </div>
 
   <script>
-    document.getElementById('btn-import-json').addEventListener('click', async () => {
-      const quizId = document.getElementById('admin-quiz-id').value;
-      const jsonRaw = document.getElementById('json-input').value;
+    const IS_LOCAL = window.location.origin.includes('localhost') || window.location.origin.includes('127.0.0.1');
+    const API_BASE = IS_LOCAL ? window.location.origin : 'https://quiz-tracker-seven.vercel.app';
 
+    const TEMPLATES = {
+      'WEB_DEV': [
+        { "question": "Jelaskan konsep arsitektur middleware pada Express.js dan alur req, res, next!" },
+        { "question": "Mengapa proteksi kuis berbasis website lebih efektif dibandingkan Chrome Extension?" },
+        { "question": "Bagaimana cara menangani keamanan CORS pada backend Node.js?" }
+      ],
+      'PEMROGRAMAN': [
+        { "question": "Jelaskan konsep dasar Event Loop pada Node.js beserta tahapan phases-nya!" },
+        { "question": "Apa perbedaan antara Synchronous vs Asynchronous programming pada JavaScript modern?" },
+        { "question": "Jelaskan fungsi Connection Pool pada PostgreSQL dan manfaatnya bagi performa!" }
+      ],
+      'DATABASE': [
+        { "question": "Jelaskan perbedaan antara transaksi ACID dengan arsitektur NoSQL BASE!" },
+        { "question": "Kapan indeks (B-Tree index) harus digunakan dan kapan sebaiknya dihindari dalam PostgreSQL?" },
+        { "question": "Jelaskan perbedaan mendasar antara INNER JOIN, LEFT JOIN, dan FULL OUTER JOIN!" }
+      ]
+    };
+
+    function setTemplate(key) {
+      if (key === 'WEB_DEV') document.getElementById('admin-quiz-id').value = 'ESSAY_WEB_DEV';
+      if (key === 'PEMROGRAMAN') document.getElementById('admin-quiz-id').value = 'ESSAY_PEMROGRAMAN';
+      if (key === 'DATABASE') document.getElementById('admin-quiz-id').value = 'ESSAY_DATABASE';
+      
+      document.getElementById('json-input').value = JSON.stringify(TEMPLATES[key], null, 2);
+    }
+
+    // Set default template awal
+    setTemplate('WEB_DEV');
+
+    // Impor Soal
+    document.getElementById('btn-import-json').addEventListener('click', async () => {
+      const quizId = document.getElementById('admin-quiz-id').value.trim();
+      const jsonRaw = document.getElementById('json-input').value.trim();
+      const statusEl = document.getElementById('import-status');
+
+      if (!quizId) {
+        alert('ID Kuis wajib diisi!');
+        return;
+      }
+
+      let questions;
       try {
-        const questions = JSON.parse(jsonRaw);
-        const res = await fetch('https://quiz-tracker-seven.vercel.app/v1/admin/questions/import', {
+        questions = JSON.parse(jsonRaw);
+        if (!Array.isArray(questions) || questions.length === 0) {
+          throw new Error('JSON harus berupa array objek soal');
+        }
+      } catch (err) {
+        alert('Format JSON tidak valid! Pastikan format array JSON benar.\n' + err.message);
+        return;
+      }
+
+      statusEl.textContent = 'Mengunggah soal...';
+      try {
+        const res = await fetch(`${API_BASE}/v1/admin/questions/import`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ quizId, questions })
         });
         const data = await res.json();
-        alert(data.message || 'Impor soal berhasil!');
+        if (res.ok && data.status === 'success') {
+          alert('✅ ' + (data.message || 'Impor soal berhasil!'));
+          statusEl.textContent = 'Berhasil diimpor pada ' + new Date().toLocaleTimeString();
+          loadExistingQuestions();
+        } else {
+          alert('❌ Gagal impor: ' + (data.message || 'Error server'));
+          statusEl.textContent = 'Gagal menyimpan.';
+        }
       } catch (err) {
-        alert('Gagal impor soal! Pastikan format JSON sudah benar.');
+        alert('Gagal menghubungi server! ' + err.message);
+        statusEl.textContent = 'Koneksi gagal.';
       }
     });
+
+    // Cek Soal Saat Ini
+    async function loadExistingQuestions() {
+      const quizId = document.getElementById('admin-quiz-id').value.trim();
+      const container = document.getElementById('existing-questions-list');
+      container.innerHTML = '<div class="spinner-border spinner-border-sm text-primary"></div> Memuat daftar soal...';
+
+      try {
+        const res = await fetch(`${API_BASE}/v1/quiz/questions/${encodeURIComponent(quizId)}`);
+        const data = await res.json();
+
+        if (data.status === 'success' && Array.isArray(data.data)) {
+          if (data.data.length === 0) {
+            container.innerHTML = `<div class="alert alert-warning py-2 small mb-0">Belum ada soal tersimpan untuk ID <b>${quizId}</b> di database. Silakan impor soal di atas.</div>`;
+            return;
+          }
+
+          container.innerHTML = `
+            <div class="small text-muted mb-2">Ditemukan <b>${data.data.length}</b> butir soal untuk kuis <b>${quizId}</b>:</div>
+            <ol class="list-group list-group-numbered">
+              ${data.data.map(q => `
+                <li class="list-group-item d-flex justify-content-between align-items-start">
+                  <div class="ms-2 me-auto">
+                    <div class="fw-semibold">${q.question_text || q.question}</div>
+                    <small class="text-muted">Tipe: ${q.question_type || 'ESSAY'} | ID: ${q.id || '-'}</small>
+                  </div>
+                </li>
+              `).join('')}
+            </ol>
+          `;
+        } else {
+          container.innerHTML = `<div class="alert alert-danger py-2 small mb-0">Error: ${data.message || 'Gagal memuat soal.'}</div>`;
+        }
+      } catch (err) {
+        container.innerHTML = `<div class="alert alert-warning py-2 small mb-0">Gagal terhubung ke server untuk kuis <b>${quizId}</b>: ${err.message}</div>`;
+      }
+    }
   </script>
 </body>
+</html>
+
 </html>

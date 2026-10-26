@@ -1,3 +1,8 @@
+// Konfigurasi Default Extension
+const API_URL = 'https://quiz-tracker-seven.vercel.app/v1/violations';
+const USER_ID = (typeof localStorage !== 'undefined' && localStorage.getItem('user_id')) || 'MHS_' + Math.floor(1000 + Math.random() * 9000);
+const QUIZ_ID = (typeof localStorage !== 'undefined' && localStorage.getItem('quiz_id')) || 'QUIZ_GENERAL';
+
 // Tambahkan fungsi penyimpanan lokal di dalam content.js
 function saveLocalViolation(violation) {
   if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
