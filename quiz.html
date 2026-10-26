@@ -180,10 +180,10 @@
     }
 
     document.getElementById('essay-form').addEventListener('submit', (e) => {
-      e.preventDefault();
-      if (isSubmitted) return;
-      isSubmitted = true;
-      submitData('SUBMITTED_MANUALLY');
+        e.preventDefault();
+        if (isSubmitted) return; // Mencegah submit ganda
+        isSubmitted = true;     
+        submitData('SUBMITTED_MANUALLY');
     });
 
     // Event Listener Pindah Tab / Screen Blur

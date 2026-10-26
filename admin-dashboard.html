@@ -2,7 +2,7 @@
 <html lang="id">
 <head>
   <meta charset="UTF-8">
-  <title>Admin - Jawaban Ujian Mahasiswa</title>
+  <title>Admin - Rekap Jawaban Ujian</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
 </head>
 <body class="bg-light p-4">
@@ -34,8 +34,11 @@
   <!-- Dashboard Jawaban -->
   <div class="container d-none" id="admin-content">
     <div class="d-flex justify-content-between align-items-center mb-4">
-      <h3 class="fw-bold">Rekap Jawaban Ujian Mahasiswa</h3>
-      <button onclick="loadSubmissions()" class="btn btn-primary btn-sm">🔄 Refresh Data</button>
+      <h3 class="fw-bold m-0">Rekap Jawaban Ujian Mahasiswa</h3>
+      <div>
+        <button onclick="loadSubmissions()" class="btn btn-primary btn-sm me-2">🔄 Refresh Data</button>
+        <button onclick="logoutAdmin()" class="btn btn-outline-danger btn-sm">🚪 Logout</button>
+      </div>
     </div>
 
     <div class="card p-3 shadow-sm">
@@ -64,60 +67,102 @@
     const API_BASE = 'https://quiz-tracker-seven.vercel.app/v1/admin';
     const loginModal = new bootstrap.Modal(document.getElementById('loginModal'));
 
-    window.addEventListener('DOMContentLoaded', () => loginModal.show());
+    // 1. CEK CACHE LOGIN (localStorage)
+    window.addEventListener('DOMContentLoaded', () => {
+      const savedToken = localStorage.getItem('admin_token');
+      if (savedToken) {
+        showDashboard();
+      } else {
+        loginModal.show();
+      }
+    });
 
+    // 2. PROSES LOGIN & SIMPAN CACHE
     document.getElementById('admin-login-form').addEventListener('submit', async (e) => {
       e.preventDefault();
       const username = document.getElementById('admin-user').value;
       const password = document.getElementById('admin-pass').value;
 
-      const res = await fetch(`${API_BASE}/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password })
-      });
-      const data = await res.json();
+      try {
+        const res = await fetch(`${API_BASE}/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password })
+        });
+        const data = await res.json();
 
-      if (data.status === 'success') {
-        loginModal.hide();
-        document.getElementById('admin-content').classList.remove('d-none');
-        loadSubmissions();
-      } else {
-        alert('Login gagal! ' + data.message);
+        if (data.status === 'success') {
+          // Simpan token ke LocalStorage
+          localStorage.setItem('admin_token', data.token);
+          loginModal.hide();
+          showDashboard();
+        } else {
+          alert('Login gagal! ' + data.message);
+        }
+      } catch (err) {
+        alert('Gagal terhubung ke server!');
       }
     });
 
-    async function loadSubmissions() {
-      const res = await fetch(`${API_BASE}/submissions`);
-      const result = await res.json();
-      const tbody = document.getElementById('submission-table');
+    function showDashboard() {
+      document.getElementById('admin-content').classList.remove('d-none');
+      loadSubmissions();
+    }
 
-      if (result.status === 'success') {
-        tbody.innerHTML = result.data.map(sub => {
-          let answersFormatted = '';
-          try {
-            const parsed = typeof sub.answers === 'string' ? JSON.parse(sub.answers) : sub.answers;
-            answersFormatted = Object.entries(parsed)
-              .map(([q, a]) => `<b>${q}:</b> ${a}`).join('<br>');
-          } catch(e) {
-            answersFormatted = JSON.stringify(sub.answers);
+    function logoutAdmin() {
+      localStorage.removeItem('admin_token');
+      window.location.reload();
+    }
+
+    // 3. LOAD & RENDER SUBMISSIONS
+    async function loadSubmissions() {
+      const tbody = document.getElementById('submission-table');
+      tbody.innerHTML = '<tr><td colspan="6" class="text-center">Memuat data...</td></tr>';
+
+      try {
+        const res = await fetch(`${API_BASE}/submissions`);
+        const result = await res.json();
+
+        if (result.status === 'success' && Array.isArray(result.data)) {
+          if (result.data.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted">Belum ada jawaban tersimpan.</td></tr>';
+            return;
           }
 
-          const statusBadge = sub.status === 'DISQUALIFIED' 
-            ? '<span class="badge bg-danger">Diskualifikasi</span>' 
-            : '<span class="badge bg-success">Selesai</span>';
+          tbody.innerHTML = result.data.map(sub => {
+            let answersFormatted = '-';
+            try {
+              const parsed = typeof sub.answers === 'string' ? JSON.parse(sub.answers) : sub.answers;
+              if (parsed && typeof parsed === 'object') {
+                answersFormatted = Object.entries(parsed)
+                  .map(([q, a]) => `<b>${q}:</b> ${a || '<i>(kosong)</i>'}`).join('<br>');
+              }
+            } catch (e) {
+              answersFormatted = String(sub.answers || '-');
+            }
 
-          return `
-            <tr>
-              <td class="fw-bold">${sub.nim}</td>
-              <td>${sub.nama}</td>
-              <td><span class="badge bg-secondary">${sub.quiz_id}</span></td>
-              <td class="small" style="max-width: 300px;">${answersFormatted}</td>
-              <td>${statusBadge}</td>
-              <td class="small text-muted">${new Date(sub.submitted_at).toLocaleString('id-ID')}</td>
-            </tr>
-          `;
-        }).join('');
+            const statusBadge = sub.status === 'DISQUALIFIED' 
+              ? '<span class="badge bg-danger">Diskualifikasi</span>' 
+              : '<span class="badge bg-success">Selesai</span>';
+
+            const waktu = sub.submitted_at 
+              ? new Date(sub.submitted_at).toLocaleString('id-ID') 
+              : '-';
+
+            return `
+              <tr>
+                <td class="fw-bold">${sub.nim && sub.nim.trim() !== '' ? sub.nim : '<span class="text-muted">-</span>'}</td>
+                <td>${sub.nama && sub.nama.trim() !== '' ? sub.nama : '<span class="text-muted">-</span>'}</td>
+                <td><span class="badge bg-secondary">${sub.quiz_id || '-'}</span></td>
+                <td class="small" style="max-width: 300px;">${answersFormatted}</td>
+                <td>${statusBadge}</td>
+                <td class="small text-muted">${waktu}</td>
+              </tr>
+            `;
+          }).join('');
+        }
+      } catch (err) {
+        tbody.innerHTML = `<tr><td colspan="6" class="text-center text-danger">Gagal memuat data: ${err.message}</td></tr>`;
       }
     }
   </script>
