@@ -400,7 +400,7 @@
           <div class="mb-3">
             <label class="form-label fw-bold">Pilih / Masukkan ID Kuis (Nomor/Angka)</label>
             <div class="input-group">
-              <input type="text" id="setting-quiz-id" class="form-control font-monospace" placeholder="Ketik nomor ID Kuis..." value="">
+              <input type="number" id="setting-quiz-id" class="form-control font-monospace" placeholder="Contoh: 2024001" min="1" step="1" value="">
               <button class="btn btn-outline-secondary" type="button" onclick="loadQuizSettings()">🔍 Muat Setting Kuis</button>
             </div>
             <div class="form-text small">Masukkan ID kuis yang telah memiliki soal di database untuk mengatur jadwal & durasinya.</div>
@@ -1203,17 +1203,33 @@
     // --- PENGATURAN JADWAL & TIMER KUIS ---
     function openScheduleModal() {
       scheduleModal.show();
-      loadQuizSettings();
+      // Jangan otomatis load — tunggu user mengisi ID dan klik tombol Muat
+      document.getElementById('save-setting-status').textContent = '';
     }
 
     async function loadQuizSettings() {
       const quizId = document.getElementById('setting-quiz-id').value.trim();
       const statusEl = document.getElementById('save-setting-status');
-      statusEl.textContent = 'Memuat data...';
+
+      if (!quizId) {
+        statusEl.innerHTML = '<span class="text-danger fw-bold">⚠️ Masukkan ID Kuis terlebih dahulu!</span>';
+        return;
+      }
+      if (isNaN(Number(quizId))) {
+        statusEl.innerHTML = '<span class="text-danger fw-bold">⚠️ ID Kuis harus berupa angka!</span>';
+        return;
+      }
+
+      statusEl.innerHTML = '<span class="text-muted">🔄 Memuat pengaturan kuis...</span>';
 
       try {
         const res = await fetch(`${API_BASE}/v1/quiz/settings/${encodeURIComponent(quizId)}`);
         const result = await res.json();
+
+        if (!res.ok) {
+          statusEl.innerHTML = `<span class="text-danger fw-bold">❌ ${result.message || 'Kuis tidak ditemukan atau belum memiliki soal!'}</span>`;
+          return;
+        }
 
         if (result.status === 'success' && result.data) {
           const data = result.data;
@@ -1234,10 +1250,12 @@
             document.getElementById('setting-end-time').value = '';
           }
 
-          statusEl.textContent = 'Pengaturan berhasil dimuat.';
+          statusEl.innerHTML = `<span class="text-success fw-bold">✅ Pengaturan Kuis ID <b>${quizId}</b> berhasil dimuat.</span>`;
+        } else {
+          statusEl.innerHTML = `<span class="text-warning fw-bold">⚠️ Kuis ID ${quizId} belum memiliki pengaturan, gunakan nilai bawaan di bawah.</span>`;
         }
       } catch (err) {
-        statusEl.textContent = 'Menggunakan nilai bawaan.';
+        statusEl.innerHTML = `<span class="text-danger">❌ Gagal terhubung ke server: ${err.message}</span>`;
       }
     }
 
@@ -1275,7 +1293,13 @@
       const maxViolations = document.getElementById('setting-max-violations').value;
       const statusEl = document.getElementById('save-setting-status');
 
-      statusEl.textContent = 'Menyimpan jadwal ke server...';
+      if (!quizId || isNaN(Number(quizId))) {
+        statusEl.innerHTML = '<span class="text-danger fw-bold">⚠️ ID Kuis wajib diisi dan harus berupa angka!</span>';
+        document.getElementById('setting-quiz-id').focus();
+        return;
+      }
+
+      statusEl.innerHTML = '<span class="text-muted">💾 Menyimpan jadwal ke server...</span>';
 
       try {
         const res = await fetch(`${API_BASE}/v1/admin/quiz/settings`, {
@@ -1294,11 +1318,10 @@
         const data = await res.json();
         if (res.ok && data.status === 'success') {
           alert('✅ ' + data.message);
-          statusEl.textContent = 'Tersimpan pada ' + new Date().toLocaleTimeString();
+          statusEl.innerHTML = `<span class="text-success fw-bold">✅ Tersimpan pada ${new Date().toLocaleTimeString()}</span>`;
           scheduleModal.hide();
         } else {
-          alert('❌ Gagal: ' + data.message);
-          statusEl.textContent = 'Gagal menyimpan.';
+          statusEl.innerHTML = `<span class="text-danger fw-bold">❌ Gagal: ${data.message}</span>`;
         }
       } catch (err) {
         alert('Gagal menghubungi server! ' + err.message);
@@ -1521,18 +1544,6 @@
                 <td class="small">${lastUpdateText}</td>
                 <td class="text-center">
                   <button class="btn btn-xs btn-outline-danger py-0 px-2 fw-semibold" style="font-size: 11px;"
-                          onclick="event.stopPropagation(); viewLiveDetailModal('${encodeURIComponent(session.nim)}', '${encodeURIComponent(session.quizId)}')">
-                    🔍 Detail Log
-                  </button>
-                </td>
-              </tr>
-            `;
-          }).join('');
-        }
-      } catch (err) {
-        tbody.innerHTML = `<tr><td colspan="12" class="text-center text-danger py-4">Gagal memuat sesi live: ${err.message}</td></tr>`;
-      }
-    }
                           onclick="event.stopPropagation(); viewLiveDetailModal('${encodeURIComponent(session.nim)}', '${encodeURIComponent(session.quizId)}')">
                     🔍 Detail Log
                   </button>
