@@ -6,22 +6,174 @@
   <title>Ujian Essay Terproteksi</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
   <style>
+    :root {
+      --primary-gradient: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+      --accent-color: #6366f1;
+    }
     body { 
-      background-color: #f8f9fa; 
+      min-height: 100vh;
+      background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 40%, #2e1065 75%, #0f172a 100%);
+      background-attachment: fixed;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
       user-select: none; 
       -webkit-user-select: none; 
+      color: #334155;
+      position: relative;
     }
+
+    /* Ambient Glow Background Effect */
+    body::before {
+      content: '';
+      position: fixed;
+      top: -150px;
+      left: -100px;
+      width: 500px;
+      height: 500px;
+      background: radial-gradient(circle, rgba(99, 102, 241, 0.25) 0%, rgba(99, 102, 241, 0) 70%);
+      pointer-events: none;
+      z-index: 0;
+    }
+    body::after {
+      content: '';
+      position: fixed;
+      bottom: -150px;
+      right: -100px;
+      width: 550px;
+      height: 550px;
+      background: radial-gradient(circle, rgba(168, 85, 247, 0.2) 0%, rgba(168, 85, 247, 0) 70%);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    /* Card Login Awal */
+    .login-wrapper {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px 16px;
+      position: relative;
+      z-index: 1;
+    }
+    .login-card {
+      width: 100%;
+      max-width: 480px;
+      background: rgba(255, 255, 255, 0.96);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border-radius: 20px;
+      border: 1px solid rgba(255, 255, 255, 0.5);
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.1);
+      overflow: hidden;
+      animation: fadeInScale 0.4s ease-out;
+    }
+    @keyframes fadeInScale {
+      from { opacity: 0; transform: scale(0.96) translateY(10px); }
+      to { opacity: 1; transform: scale(1) translateY(0); }
+    }
+
+    .login-card-header {
+      background: linear-gradient(135deg, #1e1b4b 0%, #31104b 100%);
+      color: #fff;
+      padding: 28px 24px;
+      text-align: center;
+      position: relative;
+    }
+    .exam-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.8px;
+      text-transform: uppercase;
+      padding: 4px 12px;
+      background: rgba(255, 255, 255, 0.15);
+      border: 1px solid rgba(255, 255, 255, 0.25);
+      border-radius: 20px;
+      color: #e0e7ff;
+      margin-bottom: 10px;
+    }
+
+    .form-control-custom {
+      border: 1.5px solid #e2e8f0;
+      border-radius: 10px;
+      padding: 10px 14px;
+      font-size: 14.5px;
+      transition: all 0.2s ease;
+    }
+    .form-control-custom:focus {
+      border-color: #6366f1;
+      box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.12);
+      outline: none;
+    }
+    .input-icon-wrapper {
+      position: relative;
+    }
+    .input-icon-wrapper span.input-icon {
+      position: absolute;
+      left: 14px;
+      top: 50%;
+      transform: translateY(-50%);
+      font-size: 16px;
+      opacity: 0.6;
+      pointer-events: none;
+    }
+    .input-icon-wrapper input {
+      padding-left: 42px;
+    }
+
+    .btn-gradient {
+      background: var(--primary-gradient);
+      color: #fff;
+      border: none;
+      border-radius: 10px;
+      font-weight: 700;
+      letter-spacing: 0.3px;
+      transition: all 0.2s ease;
+      box-shadow: 0 4px 14px rgba(79, 70, 229, 0.35);
+    }
+    .btn-gradient:hover:not(:disabled) {
+      transform: translateY(-1px);
+      box-shadow: 0 6px 20px rgba(79, 70, 229, 0.45);
+      color: #fff;
+    }
+    .btn-gradient:disabled {
+      opacity: 0.65;
+      cursor: not-allowed;
+    }
+
+    .security-notice {
+      display: flex;
+      justify-content: space-around;
+      padding: 12px;
+      background: #f8fafc;
+      border-top: 1px solid #f1f5f9;
+      font-size: 11.5px;
+      color: #64748b;
+      font-weight: 500;
+    }
+
+    /* Area Ujian */
     .card-custom { 
-      max-width: 850px; 
+      max-width: 900px; 
       margin: 30px auto; 
-      border-radius: 12px; 
+      border-radius: 16px; 
       border: none; 
-      box-shadow: 0 4px 20px rgba(0,0,0,0.08); 
+      background: #ffffff;
+      box-shadow: 0 20px 40px -10px rgba(0,0,0,0.3); 
     }
     .no-copy-input { 
       resize: vertical; 
+      border-radius: 10px;
+      border: 1.5px solid #cbd5e1;
     }
-    /* Toast notifikasi mengambang agar tidak memicu window.blur */
+    .no-copy-input:focus {
+      border-color: #6366f1;
+      box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
+    }
+
+    /* Toast notifikasi mengambang */
     #violation-toast-container {
       position: fixed;
       top: 20px;
@@ -36,8 +188,8 @@
       background-color: #dc3545;
       color: #fff;
       padding: 12px 18px;
-      border-radius: 8px;
-      box-shadow: 0 8px 24px rgba(220, 53, 69, 0.4);
+      border-radius: 10px;
+      box-shadow: 0 10px 25px rgba(220, 53, 69, 0.4);
       animation: slideDown 0.3s ease-out;
     }
     @keyframes slideDown {
@@ -58,41 +210,71 @@
   <!-- Container Notifikasi Pelanggaran (Non-Blocking, Anti Blur Loop) -->
   <div id="violation-toast-container"></div>
 
-  <!-- Modal Login Peserta -->
-  <div class="modal fade" id="loginModal" data-bs-backdrop="static" data-bs-keyboard="false" tabindex="-1">
-    <div class="modal-dialog modal-dialog-centered">
-      <div class="modal-content border-0 shadow">
-        <div class="modal-header bg-primary text-white">
-          <h5 class="modal-title fw-bold">Masuk Ujian Peserta</h5>
+  <!-- HALAMAN AWAL: LOGIN PESERTA UJIAN (DESAIN ELEGAN & GRADASI) -->
+  <div id="login-screen" class="login-wrapper">
+    <div class="login-card">
+      <!-- Header Kartu Login -->
+      <div class="login-card-header">
+        <div class="exam-badge">
+          🛡️ SISTEM UJIAN TERPROTEKSI
         </div>
-        <div class="modal-body p-4">
-          <form id="login-form">
-            <div class="mb-3">
-              <label class="form-label fw-bold">Nama Lengkap Mahasiswa</label>
-              <input type="text" id="input-nama" class="form-control" placeholder="Contoh: Henri Tantyoko" required>
-            </div>
-            <div class="mb-3">
-              <label class="form-label fw-bold">NIM (Nomor Induk Mahasiswa)</label>
-              <input type="text" id="input-nim" class="form-control" placeholder="Contoh: 1231241412" required>
-            </div>
-            <div class="mb-3">
-              <label class="form-label fw-bold">ID / Kode Kuis</label>
-              <div class="input-group">
-                <input type="text" id="input-quiz-id" class="form-control" placeholder="" value="" required>
-              </div>
-              <div class="form-text small">Masukkan kode kuis dan klik <b>"Cek Jadwal"</b> untuk melihat waktu buka, durasi, dan status kuis.</div>
-            </div>
+        <h4 class="fw-bold mb-1 tracking-tight text-white">Ruang Ujian Mahasiswa</h4>
+        <small class="text-white-50">Silakan masukkan identitas untuk memulai pengerjaan kuis</small>
+      </div>
 
-            <!-- Banner Jadwal Kuis -->
-            <div id="schedule-status-box" class="alert alert-info py-2 small d-none mb-3">
-              <div id="schedule-status-text">Memeriksa jadwal...</div>
+      <!-- Form Login -->
+      <div class="p-4 pt-4">
+        <form id="login-form">
+          <!-- Input Nama -->
+          <div class="mb-3">
+            <label class="form-label small fw-bold text-dark mb-1">Nama Lengkap Mahasiswa</label>
+            <div class="input-icon-wrapper">
+              <span class="input-icon">👤</span>
+              <input type="text" id="input-nama" class="form-control form-control-custom" placeholder="Ketik nama lengkap Anda..." required autocomplete="name">
             </div>
+          </div>
 
-            <button type="submit" id="btn-start-quiz" class="btn btn-primary w-100 fw-bold py-2 mt-2">
-              Mulai Ujian
-            </button>
-          </form>
-        </div>
+          <!-- Input NIM (Wajib Angka / Number) -->
+          <div class="mb-3">
+            <label class="form-label small fw-bold text-dark mb-1">NIM (Nomor Induk Mahasiswa)</label>
+            <div class="input-icon-wrapper">
+              <span class="input-icon">🎓</span>
+              <input type="text" id="input-nim" inputmode="numeric" pattern="[0-9]*" class="form-control form-control-custom font-monospace" placeholder="Contoh: 211011400123 (Hanya Angka)" required autocomplete="off">
+            </div>
+            <div class="form-text small text-muted mt-1" style="font-size: 11px;">
+              Wajib angka numerik (0-9).
+            </div>
+          </div>
+
+          <!-- Input ID Kuis (Wajib Angka / Number) -->
+          <div class="mb-3">
+            <label class="form-label small fw-bold text-dark mb-1">ID / Kode Kuis</label>
+            <div class="input-icon-wrapper">
+              <span class="input-icon">🔢</span>
+              <input type="text" id="input-quiz-id" inputmode="numeric" pattern="[0-9]*" class="form-control form-control-custom font-monospace" placeholder="Contoh: 101 atau 2024 (Hanya Angka)" required autocomplete="off">
+            </div>
+            <div class="form-text small text-muted mt-1" style="font-size: 11px;">
+              ID Kuis wajib berupa angka numerik. Jadwal diverifikasi otomatis.
+            </div>
+          </div>
+
+          <!-- Banner Status Jadwal Kuis (Muncul Otomatis saat Kuis Dicek) -->
+          <div id="schedule-status-box" class="alert py-2 px-3 small d-none mb-3 border-0 shadow-sm" style="border-radius: 10px;">
+            <div id="schedule-status-text">Memeriksa jadwal kuis...</div>
+          </div>
+
+          <!-- Tombol Mulai Ujian -->
+          <button type="submit" id="btn-start-quiz" class="btn btn-gradient w-100 py-2 mt-2 fs-6">
+            Masuk & Mulai Ujian
+          </button>
+        </form>
+      </div>
+
+      <!-- Security Feature Footer -->
+      <div class="security-notice">
+        <div>🔒 Layar Penuh Wajib</div>
+        <div>🚫 Anti Copy-Paste</div>
+        <div>⏱️ Pengawasan Real-Time</div>
       </div>
     </div>
   </div>
@@ -209,6 +391,16 @@
 
     // Bank Soal Fallback jika Database kosong atau server offline
     const FALLBACK_QUESTION_BANKS = {
+      '101': [
+        { id: 1, question_text: 'Jelaskan arsitektur middleware pada Express.js dan bagaimana urutan eksekusinya mempengaruhi aliran data request-response!' },
+        { id: 2, question_text: 'Mengapa proteksi kuis berbasis website (seperti Fullscreen API & visibilitychange) lebih efektif dibandingkan Chrome Extension?' },
+        { id: 3, question_text: 'Jelaskan bagaimana konsep CORS (Cross-Origin Resource Sharing) bekerja dan cara menanganinya di backend Node.js!' }
+      ],
+      '1': [
+        { id: 1, question_text: 'Jelaskan konsep dasar Event Loop pada Node.js beserta tahapan phases-nya!' },
+        { id: 2, question_text: 'Apa perbedaan antara Synchronous vs Asynchronous programming pada JavaScript modern?' },
+        { id: 3, question_text: 'Jelaskan kegunaan Connection Pool pada database PostgreSQL dan mengapa penting untuk performa aplikasi!' }
+      ],
       'ESSAY_WEB_DEV': [
         { id: 1, question_text: 'Jelaskan arsitektur middleware pada Express.js dan bagaimana urutan eksekusinya mempengaruhi aliran data request-response!' },
         { id: 2, question_text: 'Mengapa proteksi kuis berbasis website (seperti Fullscreen API & visibilitychange) lebih efektif dibandingkan Chrome Extension?' },
@@ -221,27 +413,43 @@
       ]
     };
 
-    const loginModal = new bootstrap.Modal(document.getElementById('loginModal'));
+    let quizCheckTimeout = null;
 
     // Inisialisasi Halaman
     window.addEventListener('DOMContentLoaded', () => {
       const urlParams = new URLSearchParams(window.location.search);
       const urlQuizId = urlParams.get('quizId');
       if (urlQuizId) {
-        document.getElementById('input-quiz-id').value = urlQuizId.trim();
-        // Hanya cek jadwal otomatis jika ada parameter ?quizId= di URL
-        checkScheduleInfo();
+        // Bersihkan hanya angka
+        const cleanId = urlQuizId.replace(/[^0-9]/g, '');
+        document.getElementById('input-quiz-id').value = cleanId;
+        if (cleanId) checkScheduleInfo();
       }
-      loginModal.show();
     });
 
-    // Sembunyikan info jadwal lama saat user mengetik atau mengganti kode kuis
-    document.getElementById('input-quiz-id').addEventListener('input', () => {
-      document.getElementById('schedule-status-box').classList.add('d-none');
-      document.getElementById('btn-start-quiz').disabled = false;
+    // Validasi Real-time: NIM Hanya Boleh Angka (Number)
+    document.getElementById('input-nim').addEventListener('input', function() {
+      this.value = this.value.replace(/[^0-9]/g, '');
     });
 
-    // --- CEK JADWAL KUIS DARI SERVER (Jam Buka - Jam Tutup) ---
+    // Validasi Real-time: ID Kuis Hanya Boleh Angka (Number) + Otomatis Verifikasi Jadwal
+    document.getElementById('input-quiz-id').addEventListener('input', function() {
+      // Hapus karakter non-angka secara instan
+      this.value = this.value.replace(/[^0-9]/g, '');
+      
+      clearTimeout(quizCheckTimeout);
+      const val = this.value.trim();
+      if (val.length >= 1) {
+        quizCheckTimeout = setTimeout(() => {
+          checkScheduleInfo();
+        }, 500);
+      } else {
+        document.getElementById('schedule-status-box').classList.add('d-none');
+        document.getElementById('btn-start-quiz').disabled = false;
+      }
+    });
+
+    // --- CEK JADWAL KUIS DARI SERVER SECARA OTOMATIS (Jam Buka - Jam Tutup) ---
     async function checkScheduleInfo() {
       const inputEl = document.getElementById('input-quiz-id');
       const targetQuiz = inputEl.value.trim();
@@ -250,16 +458,14 @@
       const startBtn = document.getElementById('btn-start-quiz');
 
       if (!targetQuiz) {
-        statusBox.classList.remove('d-none');
-        statusBox.className = 'alert alert-warning py-2 small mb-3';
-        statusText.innerHTML = '⚠️ Silakan ketik <b>ID / Kode Kuis</b> terlebih dahulu sebelum mengecek jadwal.';
-        inputEl.focus();
-        return false;
+        statusBox.classList.add('d-none');
+        startBtn.disabled = false;
+        return true;
       }
 
       statusBox.classList.remove('d-none');
-      statusBox.className = 'alert alert-info py-2 small mb-3';
-      statusText.innerHTML = `Memeriksa jadwal & ketersediaan kuis <b>${escapeHtml(targetQuiz)}</b>...`;
+      statusBox.className = 'alert alert-info py-2 px-3 small mb-3 border-0 shadow-sm';
+      statusText.innerHTML = `Memeriksa ketersediaan kuis <b>${escapeHtml(targetQuiz)}</b>...`;
 
       try {
         const res = await fetch(`${API_SETTINGS_URL}/${encodeURIComponent(targetQuiz)}`);
@@ -271,7 +477,7 @@
           const duration = quizSettings.duration_minutes || 60;
           const now = new Date();
 
-          let scheduleMessage = `⏱️ Durasi Ujian: <b>${duration} Menit</b> | Batas Toleransi Pelanggaran: <b>${MAX_VIOLATIONS}x</b><br>`;
+          let scheduleMessage = `⏱️ Durasi Ujian: <b>${duration} Menit</b> | Toleransi Pelanggaran: <b>${MAX_VIOLATIONS}x</b><br>`;
           let isLocked = false;
 
           // Cek Jam Buka (Start Time)
@@ -279,7 +485,7 @@
             const startTime = new Date(quizSettings.start_time);
             if (now < startTime) {
               isLocked = true;
-              statusBox.className = 'alert alert-warning py-2 small mb-3';
+              statusBox.className = 'alert alert-warning py-2 px-3 small mb-3 border-0 shadow-sm';
               scheduleMessage = `🔒 <b>KUIS BELUM DIBUKA!</b><br>Kuis dijadwalkan dibuka pada: <b>${startTime.toLocaleString('id-ID')}</b>. Mohon menunggu waktu ujian tiba.`;
             } else {
               scheduleMessage += `✅ Dibuka sejak: ${startTime.toLocaleTimeString('id-ID')}`;
@@ -291,8 +497,8 @@
             const endTime = new Date(quizSettings.end_time);
             if (now > endTime) {
               isLocked = true;
-              statusBox.className = 'alert alert-danger py-2 small mb-3';
-              scheduleMessage = `⛔ <b>KUIS TELAH DITUTUP!</b><br>Akses pengerjaan kuis berakhir pada: <b>${endTime.toLocaleString('id-ID')}</b>.`;
+              statusBox.className = 'alert alert-danger py-2 px-3 small mb-3 border-0 shadow-sm';
+              scheduleMessage = `⛔ <b>KUIS TELAH DITUTUP!</b><br>Batas pengerjaan kuis berakhir pada: <b>${endTime.toLocaleString('id-ID')}</b>.`;
             } else {
               scheduleMessage += ` | Ditutup pada: <b>${endTime.toLocaleTimeString('id-ID')}</b>`;
             }
@@ -305,8 +511,8 @@
           }
 
           startBtn.disabled = false;
-          statusBox.className = 'alert alert-success py-2 small mb-3';
-          statusText.innerHTML = `🟢 <b>Kuis Sedang Dibuka!</b><br>${scheduleMessage}`;
+          statusBox.className = 'alert alert-success py-2 px-3 small mb-3 border-0 shadow-sm';
+          statusText.innerHTML = `🟢 <b>Kuis Terbuka & Siap Dikerjakan!</b><br>${scheduleMessage}`;
           return true;
         }
       } catch (err) {
@@ -314,7 +520,7 @@
       }
 
       startBtn.disabled = false;
-      statusBox.className = 'alert alert-secondary py-2 small mb-3';
+      statusBox.className = 'alert alert-secondary py-2 px-3 small mb-3 border-0 shadow-sm';
       statusText.innerHTML = `🟢 Kuis <b>${escapeHtml(targetQuiz)}</b> siap dikerjakan (Durasi default: 60 Menit | Maks Pelanggaran: ${MAX_VIOLATIONS}x).`;
       return true;
     }
@@ -331,15 +537,35 @@
         return;
       }
 
+      // Validasi NIM: Wajib angka numerik
+      if (!/^\d+$/.test(userNim)) {
+        alert('NIM harus berupa angka (number)!');
+        document.getElementById('input-nim').focus();
+        return;
+      }
+
       if (!quizId) {
-        alert('ID / Kode Kuis wajib diisi!');
+        alert('ID Kuis wajib diisi!');
         document.getElementById('input-quiz-id').focus();
         return;
       }
 
+      // Validasi ID Kuis: Wajib angka numerik
+      if (!/^\d+$/.test(quizId)) {
+        alert('ID Kuis harus berupa angka (number)!');
+        document.getElementById('input-quiz-id').focus();
+        return;
+      }
+
+      const startBtn = document.getElementById('btn-start-quiz');
+      startBtn.disabled = true;
+      startBtn.innerHTML = '⏳ Menyiapkan Ujian...';
+
       // Pastikan jadwal dicek dan valid sebelum mulai
       const isAvailable = await checkScheduleInfo();
-      if (isAvailable === false || document.getElementById('btn-start-quiz').disabled) {
+      if (isAvailable === false || startBtn.disabled) {
+        startBtn.disabled = false;
+        startBtn.innerHTML = 'Masuk & Mulai Ujian';
         alert('Maaf, kuis belum dibuka atau sudah ditutup sesuai jadwal!');
         return;
       }
@@ -349,7 +575,8 @@
       document.getElementById('display-quiz-id').textContent = `Kuis: ${quizId}`;
       document.getElementById('violation-badge').textContent = `Pelanggaran: 0 / ${MAX_VIOLATIONS}`;
 
-      loginModal.hide();
+      // Sembunyikan Halaman Login dan Tampilkan Ruang Ujian
+      document.getElementById('login-screen').classList.add('d-none');
       document.getElementById('quiz-container').classList.remove('d-none');
       
       isLoggedIn = true;

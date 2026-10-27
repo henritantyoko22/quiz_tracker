@@ -56,6 +56,22 @@ let memoryUsers = [...initialUsers];
 
 // Penyimpanan cadangan (in-memory) untuk Pengaturan Jadwal & Timer Kuis
 const memoryQuizSettings = {
+  '101': {
+    quiz_id: '101',
+    start_time: null,
+    end_time: null,
+    duration_minutes: 60,
+    max_violations: 3,
+    is_active: true
+  },
+  '1': {
+    quiz_id: '1',
+    start_time: null,
+    end_time: null,
+    duration_minutes: 45,
+    max_violations: 3,
+    is_active: true
+  },
   'ESSAY_WEB_DEV': {
     quiz_id: 'ESSAY_WEB_DEV',
     start_time: null,
