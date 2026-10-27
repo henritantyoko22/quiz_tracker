@@ -478,24 +478,29 @@ app.post('/v1/quiz/live/heartbeat', (req, res) => {
 });
 
 // Ambil semua sesi live (SUPERADMIN & PROCTOR)
+// Secara default hanya mengembalikan yang statusnya 'ACTIVE' (sedang mengerjakan)
 app.get('/v1/admin/live/sessions', authenticate, requireRole('SUPERADMIN', 'PROCTOR'), (req, res) => {
-  const cutoff = Date.now() - 2 * 60 * 60 * 1000; // Tampilkan sesi hingga 2 jam lalu
+  const showAll = req.query.all === 'true'; // opsional jika ingin melihat riwayat yang baru selesai
+  const cutoff = Date.now() - 2 * 60 * 60 * 1000;
   const sessions = [];
 
   for (const [, session] of liveStudentSessions.entries()) {
-    if (session.lastHeartbeat >= cutoff || session.status === 'ACTIVE') {
-      // Hitung total waktu pengerjaan (detik dari startedAt)
-      const totalElapsed = Math.floor((Date.now() - session.startedAt) / 1000);
-      sessions.push({ ...session, totalElapsedSeconds: totalElapsed });
+    // Jika tidak minta all, HANYA masukkan yang masih ACTIVE
+    if (!showAll) {
+      if (session.status === 'ACTIVE') {
+        const totalElapsed = Math.floor((Date.now() - session.startedAt) / 1000);
+        sessions.push({ ...session, totalElapsedSeconds: totalElapsed });
+      }
+    } else {
+      if (session.lastHeartbeat >= cutoff || session.status === 'ACTIVE') {
+        const totalElapsed = Math.floor((Date.now() - session.startedAt) / 1000);
+        sessions.push({ ...session, totalElapsedSeconds: totalElapsed });
+      }
     }
   }
 
-  // Urutkan: ACTIVE duluan, lalu berdasarkan startedAt terbaru
-  sessions.sort((a, b) => {
-    if (a.status === 'ACTIVE' && b.status !== 'ACTIVE') return -1;
-    if (a.status !== 'ACTIVE' && b.status === 'ACTIVE') return 1;
-    return b.startedAt - a.startedAt;
-  });
+  // Urutkan berdasarkan startedAt terbaru
+  sessions.sort((a, b) => b.startedAt - a.startedAt);
 
   res.json({ status: 'success', data: sessions, total: sessions.length });
 });
