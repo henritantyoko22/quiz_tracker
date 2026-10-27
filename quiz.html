@@ -81,7 +81,6 @@
                 <input type="text" id="input-quiz-id" class="form-control" placeholder="" value="" required>
                 <button type="button" class="btn btn-outline-secondary" onclick="checkScheduleInfo()">Cek Jadwal</button>
               </div>
-              <div class="form-text small">Atau gunakan parameter URL <code>?quizId=...</code></div>
             </div>
 
             <!-- Banner Jadwal Kuis -->
@@ -242,8 +241,8 @@
 
         if (json.status === 'success' && json.data) {
           quizSettings = json.data;
-          MAX_VIOLATIONS = quizSettings.max_violations || 3;
-          const duration = quizSettings.duration_minutes || 60;
+          MAX_VIOLATIONS = quizSettings.max_violations || 4;
+          const duration = quizSettings.duration_minutes;
           const now = new Date();
 
           let scheduleMessage = `⏱️ Durasi Ujian: <b>${duration} Menit</b> | Batas Toleransi Pelanggaran: <b>${MAX_VIOLATIONS}x</b><br>`;
