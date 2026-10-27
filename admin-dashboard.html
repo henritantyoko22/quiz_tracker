@@ -201,7 +201,46 @@
       </div>
     </div>
 
-      <!-- PANEL PENGAWASAN LIVE UJIAN (SUPERADMIN & PENGAWAS) -->
+    <!-- TABEL REKAP JAWABAN & PELANGGARAN -->
+    <div class="card p-3 shadow-sm border-0 bg-white">
+      <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0" id="main-table">
+          <thead class="table-dark">
+            <tr>
+              <th style="width: 48px; text-align: center;">No.</th>
+              <th onclick="toggleSort('nim')" class="cursor-pointer" style="min-width: 120px;" title="Klik untuk mengurutkan">
+                NIM <span id="sort-nim" class="sort-icon">↕</span>
+              </th>
+              <th onclick="toggleSort('nama')" class="cursor-pointer" style="min-width: 170px;" title="Klik untuk mengurutkan">
+                Nama Mahasiswa <span id="sort-nama" class="sort-icon">↕</span>
+              </th>
+              <th onclick="toggleSort('quiz_id')" class="cursor-pointer" style="min-width: 130px;" title="Klik untuk mengurutkan">
+                Kuis <span id="sort-quiz_id" class="sort-icon">↕</span>
+              </th>
+              <th onclick="toggleSort('violation_count')" class="cursor-pointer" style="min-width: 160px;" title="Klik untuk mengurutkan">
+                Pelanggaran <span id="sort-violation_count" class="sort-icon">↕</span>
+              </th>
+              <th style="min-width: 300px;">Jawaban Essay</th>
+              <th onclick="toggleSort('status')" class="cursor-pointer" style="min-width: 120px;" title="Klik untuk mengurutkan">
+                Status <span id="sort-status" class="sort-icon">↕</span>
+              </th>
+              <th onclick="toggleSort('grade')" class="cursor-pointer" style="min-width: 210px;" title="Klik untuk mengurutkan">
+                Penilaian (Grading) <span id="sort-grade" class="sort-icon">↕</span>
+              </th>
+              <th onclick="toggleSort('submitted_at')" class="cursor-pointer" style="min-width: 140px;" title="Klik untuk mengurutkan">
+                Waktu Submit <span id="sort-submitted_at" class="sort-icon">↕</span>
+              </th>
+            </tr>
+          </thead>
+          <tbody id="submission-table">
+            <tr><td colspan="9" class="text-center py-4">Memuat data terbaru...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+
+    <!-- PANEL PENGAWASAN LIVE UJIAN (SUPERADMIN & PENGAWAS) -->
     <div id="live-monitor-panel" class="card p-3 shadow border-danger mb-4 bg-white no-print mt-3">
       <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2 pb-2 border-bottom">
         <div>
@@ -256,44 +295,6 @@
                 Belum ada peserta yang aktif mengerjakan ujian saat ini. Begitu mahasiswa menekan "Mulai Ujian", sesi mereka akan otomatis muncul di sini.
               </td>
             </tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-
-    <!-- TABEL REKAP JAWABAN & PELANGGARAN -->
-    <div class="card p-3 shadow-sm border-0 bg-white">
-      <div class="table-responsive">
-        <table class="table table-hover align-middle mb-0" id="main-table">
-          <thead class="table-dark">
-            <tr>
-              <th style="width: 48px; text-align: center;">No.</th>
-              <th onclick="toggleSort('nim')" class="cursor-pointer" style="min-width: 120px;" title="Klik untuk mengurutkan">
-                NIM <span id="sort-nim" class="sort-icon">↕</span>
-              </th>
-              <th onclick="toggleSort('nama')" class="cursor-pointer" style="min-width: 170px;" title="Klik untuk mengurutkan">
-                Nama Mahasiswa <span id="sort-nama" class="sort-icon">↕</span>
-              </th>
-              <th onclick="toggleSort('quiz_id')" class="cursor-pointer" style="min-width: 130px;" title="Klik untuk mengurutkan">
-                Kuis <span id="sort-quiz_id" class="sort-icon">↕</span>
-              </th>
-              <th onclick="toggleSort('violation_count')" class="cursor-pointer" style="min-width: 160px;" title="Klik untuk mengurutkan">
-                Pelanggaran <span id="sort-violation_count" class="sort-icon">↕</span>
-              </th>
-              <th style="min-width: 300px;">Jawaban Essay</th>
-              <th onclick="toggleSort('status')" class="cursor-pointer" style="min-width: 120px;" title="Klik untuk mengurutkan">
-                Status <span id="sort-status" class="sort-icon">↕</span>
-              </th>
-              <th onclick="toggleSort('grade')" class="cursor-pointer" style="min-width: 210px;" title="Klik untuk mengurutkan">
-                Penilaian (Grading) <span id="sort-grade" class="sort-icon">↕</span>
-              </th>
-              <th onclick="toggleSort('submitted_at')" class="cursor-pointer" style="min-width: 140px;" title="Klik untuk mengurutkan">
-                Waktu Submit <span id="sort-submitted_at" class="sort-icon">↕</span>
-              </th>
-            </tr>
-          </thead>
-          <tbody id="submission-table">
-            <tr><td colspan="9" class="text-center py-4">Memuat data terbaru...</td></tr>
           </tbody>
         </table>
       </div>
