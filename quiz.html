@@ -884,6 +884,9 @@
           body: JSON.stringify({
             nim: userNim,
             quizId: quizId,
+            userId: userNama,
+            totalQuestions: loadedQuestions.length,
+            questionTexts: loadedQuestions.map(q => q.question_text || ''),
             currentQuestionIndex: currentFocusedQuestion,
             currentQuestionText: qText,
             questionTimings: buildQuestionTimings(),

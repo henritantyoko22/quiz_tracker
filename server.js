@@ -25,34 +25,9 @@ function verifyPassword(password, storedHash, salt) {
   return hash === storedHash;
 }
 
-// Akun bawaan (Seeded Default Users)
-const defaultSalt = 'salt_quiz_tracker_2026';
-const initialUsers = [
-  {
-    username: 'admin',
-    password_hash: crypto.pbkdf2Sync('admin123', defaultSalt, 10000, 64, 'sha512').toString('hex'),
-    salt: defaultSalt,
-    full_name: 'Super Administrator',
-    role: 'SUPERADMIN'
-  },
-  {
-    username: 'dosen',
-    password_hash: crypto.pbkdf2Sync('dosen123', defaultSalt, 10000, 64, 'sha512').toString('hex'),
-    salt: defaultSalt,
-    full_name: 'Dr. Dosen Pengampu',
-    role: 'DOSEN'
-  },
-  {
-    username: 'pengawas',
-    password_hash: crypto.pbkdf2Sync('pengawas123', defaultSalt, 10000, 64, 'sha512').toString('hex'),
-    salt: defaultSalt,
-    full_name: 'Pengawas Ujian (Proctor)',
-    role: 'PROCTOR'
-  }
-];
-
-// Fallback in-memory jika database PostgreSQL offline
-let memoryUsers = [...initialUsers];
+// Fallback in-memory users (hanya digunakan jika DB benar-benar offline)
+// TIDAK ada akun default hardcode — semua akun dikelola via database
+let memoryUsers = [];
 
 // Sesi Login Aktif (Token -> User Data)
 const activeSessions = new Map();
@@ -140,23 +115,8 @@ async function initDbTables() {
       );
     `);
 
-    // Seed akun bawaan jika tabel masih kosong
-    try {
-      const userCheck = await db.query('SELECT COUNT(*) AS count FROM admin_users');
-      if (parseInt(userCheck.rows[0].count) === 0) {
-        for (const u of initialUsers) {
-          await db.query(
-            `INSERT INTO admin_users (username, password_hash, salt, full_name, role)
-             VALUES ($1, $2, $3, $4, $5)
-             ON CONFLICT (username) DO NOTHING`,
-            [u.username, u.password_hash, u.salt, u.full_name, u.role]
-          );
-        }
-        console.log('✅ Seed akun admin awal (admin, dosen, pengawas) berhasil dibuat di PostgreSQL.');
-      }
-    } catch (e) {
-      console.warn('ℹ️ Seed akun DB:', e.message);
-    }
+    // Tidak ada seed akun default — akun dibuat manual via fitur Manajemen User
+    // agar tidak ada password hardcode yang bisa ditebak
 
     // 2. Buat tabel quiz_settings untuk timer & jam buka/tutup
     await db.query(`
@@ -459,7 +419,8 @@ app.post('/v1/quiz/live/heartbeat', (req, res) => {
     currentQuestionIndex, currentQuestionText,
     questionTimings, activityLog,
     remainingSeconds, violationCount,
-    status
+    status,
+    userId, totalQuestions, questionTexts
   } = req.body;
 
   if (!nim || !quizId) {
@@ -468,10 +429,30 @@ app.post('/v1/quiz/live/heartbeat', (req, res) => {
 
   const key = getLiveSessionKey(nim, quizId);
   const now = Date.now();
-  const existing = liveStudentSessions.get(key);
+  let existing = liveStudentSessions.get(key);
 
+  // Jika sesi belum ada (server restart / cold start), buat otomatis (upsert)
   if (!existing) {
-    return res.status(404).json({ status: 'error', message: 'Sesi tidak ditemukan. Daftarkan sesi terlebih dahulu.' });
+    existing = {
+      key,
+      nama: userId || nim,
+      nim: nim.trim(),
+      quizId: quizId.trim(),
+      totalQuestions: totalQuestions || 0,
+      questionTexts: questionTexts || [],
+      startedAt: now,
+      startedAtISO: new Date(now).toISOString(),
+      currentQuestionIndex: 0,
+      currentQuestionText: (questionTexts && questionTexts[0]) || 'Soal 1',
+      questionTimings: [],
+      activityLog: [],
+      status: 'ACTIVE',
+      lastHeartbeat: now,
+      lastHeartbeatISO: new Date(now).toISOString(),
+      violationCount: 0,
+      remainingSeconds: null
+    };
+    console.log(`🔄 Sesi live di-recover via heartbeat: ${nim} | Kuis: ${quizId}`);
   }
 
   // Update data sesi dengan data terbaru dari client
@@ -489,6 +470,8 @@ app.post('/v1/quiz/live/heartbeat', (req, res) => {
     existing.status = status;
     existing.finishedAt = now;
     existing.finishedAtISO = new Date(now).toISOString();
+  } else {
+    existing.status = 'ACTIVE';
   }
 
   liveStudentSessions.set(key, existing);
