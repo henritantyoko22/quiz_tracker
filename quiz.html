@@ -78,9 +78,10 @@
             <div class="mb-3">
               <label class="form-label fw-bold">ID / Kode Kuis</label>
               <div class="input-group">
-                <input type="text" id="input-quiz-id" class="form-control" placeholder="" value="" required>
-                <button type="button" class="btn btn-outline-secondary" onclick="checkScheduleInfo()">Cek Jadwal</button>
+                <input type="text" id="input-quiz-id" class="form-control" placeholder="Contoh: ESSAY_WEB_DEV" value="" required>
+                <button type="button" class="btn btn-outline-primary fw-semibold" onclick="checkScheduleInfo()">🔍 Cek Jadwal</button>
               </div>
+              <div class="form-text small">Masukkan kode kuis dan klik <b>"Cek Jadwal"</b> untuk melihat waktu buka, durasi, dan status kuis.</div>
             </div>
 
             <!-- Banner Jadwal Kuis -->
@@ -217,23 +218,37 @@
       const urlQuizId = urlParams.get('quizId');
       if (urlQuizId) {
         document.getElementById('input-quiz-id').value = urlQuizId.trim();
+        // Hanya cek jadwal otomatis jika ada parameter ?quizId= di URL
+        checkScheduleInfo();
       }
       loginModal.show();
-      checkScheduleInfo();
     });
 
-    document.getElementById('input-quiz-id').addEventListener('change', checkScheduleInfo);
+    // Sembunyikan info jadwal lama saat user mengetik atau mengganti kode kuis
+    document.getElementById('input-quiz-id').addEventListener('input', () => {
+      document.getElementById('schedule-status-box').classList.add('d-none');
+      document.getElementById('btn-start-quiz').disabled = false;
+    });
 
     // --- CEK JADWAL KUIS DARI SERVER (Jam Buka - Jam Tutup) ---
     async function checkScheduleInfo() {
-      const targetQuiz = document.getElementById('input-quiz-id').value.trim() || 'ESSAY_WEB_DEV';
+      const inputEl = document.getElementById('input-quiz-id');
+      const targetQuiz = inputEl.value.trim();
       const statusBox = document.getElementById('schedule-status-box');
       const statusText = document.getElementById('schedule-status-text');
       const startBtn = document.getElementById('btn-start-quiz');
 
+      if (!targetQuiz) {
+        statusBox.classList.remove('d-none');
+        statusBox.className = 'alert alert-warning py-2 small mb-3';
+        statusText.innerHTML = '⚠️ Silakan ketik <b>ID / Kode Kuis</b> terlebih dahulu sebelum mengecek jadwal.';
+        inputEl.focus();
+        return false;
+      }
+
       statusBox.classList.remove('d-none');
       statusBox.className = 'alert alert-info py-2 small mb-3';
-      statusText.innerHTML = 'Memeriksa jadwal & ketersediaan kuis...';
+      statusText.innerHTML = `Memeriksa jadwal & ketersediaan kuis <b>${escapeHtml(targetQuiz)}</b>...`;
 
       try {
         const res = await fetch(`${API_SETTINGS_URL}/${encodeURIComponent(targetQuiz)}`);
@@ -241,8 +256,8 @@
 
         if (json.status === 'success' && json.data) {
           quizSettings = json.data;
-          MAX_VIOLATIONS = quizSettings.max_violations || 4;
-          const duration = quizSettings.duration_minutes;
+          MAX_VIOLATIONS = quizSettings.max_violations || 3;
+          const duration = quizSettings.duration_minutes || 60;
           const now = new Date();
 
           let scheduleMessage = `⏱️ Durasi Ujian: <b>${duration} Menit</b> | Batas Toleransi Pelanggaran: <b>${MAX_VIOLATIONS}x</b><br>`;
@@ -275,13 +290,13 @@
           if (isLocked) {
             startBtn.disabled = true;
             statusText.innerHTML = scheduleMessage;
-            return;
+            return false;
           }
 
           startBtn.disabled = false;
           statusBox.className = 'alert alert-success py-2 small mb-3';
           statusText.innerHTML = `🟢 <b>Kuis Sedang Dibuka!</b><br>${scheduleMessage}`;
-          return;
+          return true;
         }
       } catch (err) {
         console.warn('Gagal ambil jadwal:', err);
@@ -289,7 +304,8 @@
 
       startBtn.disabled = false;
       statusBox.className = 'alert alert-secondary py-2 small mb-3';
-      statusText.innerHTML = `🟢 Kuis siap dikerjakan (Durasi default: 60 Menit | Maks Pelanggaran: ${MAX_VIOLATIONS}x).`;
+      statusText.innerHTML = `🟢 Kuis <b>${escapeHtml(targetQuiz)}</b> siap dikerjakan (Durasi default: 60 Menit | Maks Pelanggaran: ${MAX_VIOLATIONS}x).`;
+      return true;
     }
 
     // --- PROSES LOGIN PESERTA & MEMULAI UJIAN ---
@@ -297,16 +313,22 @@
       e.preventDefault();
       userNama = document.getElementById('input-nama').value.trim();
       userNim = document.getElementById('input-nim').value.trim();
-      quizId = document.getElementById('input-quiz-id').value.trim() || '';
+      quizId = document.getElementById('input-quiz-id').value.trim();
 
       if (!userNama || !userNim) {
         alert('Nama dan NIM wajib diisi!');
         return;
       }
 
-      // Pastikan jadwal masih valid
-      await checkScheduleInfo();
-      if (document.getElementById('btn-start-quiz').disabled) {
+      if (!quizId) {
+        alert('ID / Kode Kuis wajib diisi!');
+        document.getElementById('input-quiz-id').focus();
+        return;
+      }
+
+      // Pastikan jadwal dicek dan valid sebelum mulai
+      const isAvailable = await checkScheduleInfo();
+      if (isAvailable === false || document.getElementById('btn-start-quiz').disabled) {
         alert('Maaf, kuis belum dibuka atau sudah ditutup sesuai jadwal!');
         return;
       }
