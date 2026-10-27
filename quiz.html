@@ -389,30 +389,6 @@
     const API_LIVE_SESSION_URL = `${API_BASE}/v1/quiz/live/session`;
     const API_LIVE_HEARTBEAT_URL = `${API_BASE}/v1/quiz/live/heartbeat`;
 
-    // Bank Soal Fallback jika Database kosong atau server offline
-    const FALLBACK_QUESTION_BANKS = {
-      '101': [
-        { id: 1, question_text: 'Jelaskan arsitektur middleware pada Express.js dan bagaimana urutan eksekusinya mempengaruhi aliran data request-response!' },
-        { id: 2, question_text: 'Mengapa proteksi kuis berbasis website (seperti Fullscreen API & visibilitychange) lebih efektif dibandingkan Chrome Extension?' },
-        { id: 3, question_text: 'Jelaskan bagaimana konsep CORS (Cross-Origin Resource Sharing) bekerja dan cara menanganinya di backend Node.js!' }
-      ],
-      '1': [
-        { id: 1, question_text: 'Jelaskan konsep dasar Event Loop pada Node.js beserta tahapan phases-nya!' },
-        { id: 2, question_text: 'Apa perbedaan antara Synchronous vs Asynchronous programming pada JavaScript modern?' },
-        { id: 3, question_text: 'Jelaskan kegunaan Connection Pool pada database PostgreSQL dan mengapa penting untuk performa aplikasi!' }
-      ],
-      'ESSAY_WEB_DEV': [
-        { id: 1, question_text: 'Jelaskan arsitektur middleware pada Express.js dan bagaimana urutan eksekusinya mempengaruhi aliran data request-response!' },
-        { id: 2, question_text: 'Mengapa proteksi kuis berbasis website (seperti Fullscreen API & visibilitychange) lebih efektif dibandingkan Chrome Extension?' },
-        { id: 3, question_text: 'Jelaskan bagaimana konsep CORS (Cross-Origin Resource Sharing) bekerja dan cara menanganinya di backend Node.js!' }
-      ],
-      'ESSAY_PEMROGRAMAN': [
-        { id: 1, question_text: 'Jelaskan konsep dasar Event Loop pada Node.js beserta tahapan phases-nya!' },
-        { id: 2, question_text: 'Apa perbedaan antara Synchronous vs Asynchronous programming pada JavaScript modern?' },
-        { id: 3, question_text: 'Jelaskan kegunaan Connection Pool pada database PostgreSQL dan mengapa penting untuk performa aplikasi!' }
-      ]
-    };
-
     let quizCheckTimeout = null;
 
     // Inisialisasi Halaman
@@ -481,11 +457,21 @@
 
         // KUIS DITEMUKAN: Ambil data riil dari database (Bukan Hardcoded)
         quizSettings = json.data;
+        const totalQ = parseInt(quizSettings.total_questions || 0);
+
+        // JIKA KUIS ADA TAPI BELUM MEMILIKI BUTIR SOAL DI DATABASE (KOSONG)
+        if (totalQ === 0 || json.has_questions === false) {
+          startBtn.disabled = true;
+          statusBox.className = 'alert alert-danger py-2 px-3 small mb-3 border-0 shadow-sm';
+          statusText.innerHTML = `⛔ <b>SOAL BELUM TERSEDIA!</b><br>Kuis #${escapeHtml(targetQuiz)} terdaftar di sistem, tetapi <b>belum ada butir soal di database</b>.<br>Ujian tidak dapat dimulai karena soal kosong. Silakan hubungi dosen pengampu.`;
+          return false;
+        }
+
         MAX_VIOLATIONS = parseInt(quizSettings.max_violations) || 3;
         const duration = parseInt(quizSettings.duration_minutes) || 60; // Durasi ASLI dari database
         const now = new Date();
 
-        let scheduleMessage = `⏱️ Durasi Ujian: <b>${duration} Menit</b> (sesuai database) | Toleransi Pelanggaran: <b>${MAX_VIOLATIONS}x</b><br>`;
+        let scheduleMessage = `📝 Jumlah Soal: <b>${totalQ} Butir Soal</b> | ⏱️ Durasi: <b>${duration} Menit</b> (database) | Toleransi: <b>${MAX_VIOLATIONS}x</b><br>`;
         let isLocked = false;
 
         // Cek apakah kuis dinonaktifkan oleh admin
@@ -701,23 +687,18 @@
         console.warn('Gagal menghubungi API soal, beralih ke bank soal cadangan:', err);
       }
 
-      // Jika dari DB belum ada soal, periksa apakah kuis memiliki soal cadangan
+      // Jika dari DB soal kosong / tidak ditemukan
       if (questions.length === 0) {
-        if (FALLBACK_QUESTION_BANKS[targetQuizId]) {
-          questions = FALLBACK_QUESTION_BANKS[targetQuizId];
-          fallbackAlertEl.classList.remove('d-none');
-        } else {
-          loadingEl.classList.add('d-none');
-          listEl.innerHTML = `
-            <div class="alert alert-warning text-center py-4 my-3 border-0 shadow-sm" style="border-radius: 12px;">
-              <h5 class="fw-bold mb-2">⚠️ Soal Ujian Belum Tersedia</h5>
-              <p class="mb-0 text-muted">Dosen atau admin pengampu belum mengunggah butir soal untuk <b>Kuis #${escapeHtml(targetQuizId)}</b> di database.<br>Silakan hubungi pengawas atau dosen pengampu Anda.</p>
-            </div>
-          `;
-          document.getElementById('btn-submit').classList.add('d-none');
-          formEl.classList.remove('d-none');
-          return;
-        }
+        loadingEl.classList.add('d-none');
+        listEl.innerHTML = `
+          <div class="alert alert-danger text-center py-4 my-3 border-0 shadow-sm" style="border-radius: 12px;">
+            <h5 class="fw-bold mb-2">⛔ Lembar Soal Ujian Kosong</h5>
+            <p class="mb-0 text-muted">Dosen atau admin pengampu belum mengunggah butir pertanyaan untuk <b>Kuis #${escapeHtml(targetQuizId)}</b> di database.<br>Ujian tidak dapat dilanjutkan karena tidak ada soal untuk dikerjakan.</p>
+          </div>
+        `;
+        document.getElementById('btn-submit').classList.add('d-none');
+        formEl.classList.remove('d-none');
+        return;
       }
 
       renderQuestions(questions);

@@ -90,6 +90,30 @@ const memoryQuizSettings = {
   }
 };
 
+// Bank Soal Bawaan di Memory Server (untuk kuis terdaftar)
+const memoryQuizQuestions = {
+  '101': [
+    { id: 1, question_text: 'Jelaskan arsitektur middleware pada Express.js dan bagaimana urutan eksekusinya mempengaruhi aliran data request-response!', question_type: 'ESSAY' },
+    { id: 2, question_text: 'Mengapa proteksi kuis berbasis website (seperti Fullscreen API & visibilitychange) lebih efektif dibandingkan Chrome Extension?', question_type: 'ESSAY' },
+    { id: 3, question_text: 'Jelaskan bagaimana konsep CORS (Cross-Origin Resource Sharing) bekerja dan cara menanganinya di backend Node.js!', question_type: 'ESSAY' }
+  ],
+  '1': [
+    { id: 1, question_text: 'Jelaskan konsep dasar Event Loop pada Node.js beserta tahapan phases-nya!', question_type: 'ESSAY' },
+    { id: 2, question_text: 'Apa perbedaan antara Synchronous vs Asynchronous programming pada JavaScript modern?', question_type: 'ESSAY' },
+    { id: 3, question_text: 'Jelaskan kegunaan Connection Pool pada database PostgreSQL dan mengapa penting untuk performa aplikasi!', question_type: 'ESSAY' }
+  ],
+  'ESSAY_WEB_DEV': [
+    { id: 1, question_text: 'Jelaskan arsitektur middleware pada Express.js dan bagaimana urutan eksekusinya mempengaruhi aliran data request-response!', question_type: 'ESSAY' },
+    { id: 2, question_text: 'Mengapa proteksi kuis berbasis website (seperti Fullscreen API & visibilitychange) lebih efektif dibandingkan Chrome Extension?', question_type: 'ESSAY' },
+    { id: 3, question_text: 'Jelaskan bagaimana konsep CORS (Cross-Origin Resource Sharing) bekerja dan cara menanganinya di backend Node.js!', question_type: 'ESSAY' }
+  ],
+  'ESSAY_PEMROGRAMAN': [
+    { id: 1, question_text: 'Jelaskan konsep dasar Event Loop pada Node.js beserta tahapan phases-nya!', question_type: 'ESSAY' },
+    { id: 2, question_text: 'Apa perbedaan antara Synchronous vs Asynchronous programming pada JavaScript modern?', question_type: 'ESSAY' },
+    { id: 3, question_text: 'Jelaskan kegunaan Connection Pool pada database PostgreSQL dan mengapa penting untuk performa aplikasi!', question_type: 'ESSAY' }
+  ]
+};
+
 // Sesi Login Aktif (Token -> User Data)
 const activeSessions = new Map();
 
@@ -252,10 +276,10 @@ app.get('/v1/quiz/settings/:quizId', async (req, res) => {
   }
 
   try {
-    // 1. Cek tabel quiz_settings di database
     let dbSetting = null;
     let totalQuestions = 0;
 
+    // 1. Cek tabel quiz_settings dan quiz_questions di database
     try {
       const settingResult = await db.query(
         `SELECT quiz_id, start_time, end_time, duration_minutes, max_violations, is_active 
@@ -267,7 +291,7 @@ app.get('/v1/quiz/settings/:quizId', async (req, res) => {
         dbSetting = settingResult.rows[0];
       }
 
-      // Cek jumlah soal yang tersedia untuk kuis ini di DB
+      // Cek jumlah soal riil di database
       const qResult = await db.query(
         `SELECT COUNT(*) AS total FROM quiz_questions WHERE quiz_id = $1`,
         [cleanQuizId]
@@ -277,79 +301,78 @@ app.get('/v1/quiz/settings/:quizId', async (req, res) => {
       console.warn('DB query error on quiz settings:', dbErr.message);
     }
 
-    // Jika setting ditemukan di database
-    if (dbSetting) {
-      return res.json({
-        status: 'success',
-        exists: true,
-        data: {
-          quiz_id: dbSetting.quiz_id,
-          start_time: dbSetting.start_time,
-          end_time: dbSetting.end_time,
-          duration_minutes: parseInt(dbSetting.duration_minutes), // Nilai riil dari DB, BUKAN hardcode
-          max_violations: parseInt(dbSetting.max_violations) || 3,
-          is_active: dbSetting.is_active !== false,
-          total_questions: totalQuestions
-        }
+    // Jika DB offline atau belum ada soal di DB, periksa memory bank soal resmi
+    if (totalQuestions === 0 && memoryQuizQuestions[cleanQuizId]) {
+      totalQuestions = memoryQuizQuestions[cleanQuizId].length;
+    }
+
+    // JIKA TIDAK DITEMUKAN DI MANAPUN (tidak ada setting dan tidak ada soal sama sekali)
+    if (!dbSetting && totalQuestions === 0 && !memoryQuizSettings[cleanQuizId]) {
+      return res.status(404).json({
+        status: 'error',
+        exists: false,
+        has_questions: false,
+        total_questions: 0,
+        message: `ID Kuis "${cleanQuizId}" tidak ditemukan di database. Pastikan nomor kuis benar.`
       });
     }
 
-    // Jika di quiz_settings belum ada row tetapi di quiz_questions ada soalnya
-    if (totalQuestions > 0) {
-      return res.json({
-        status: 'success',
+    // JIKA KUIS ADA TAPI TIDAK MEMILIKI BUTIR SOAL DI DATABASE (KOSONG)
+    if (totalQuestions === 0) {
+      return res.status(400).json({
+        status: 'error',
         exists: true,
-        data: {
-          quiz_id: cleanQuizId,
-          start_time: null,
-          end_time: null,
-          duration_minutes: 60,
-          max_violations: 3,
-          is_active: true,
-          total_questions: totalQuestions
-        }
+        has_questions: false,
+        total_questions: 0,
+        message: `Kuis #${cleanQuizId} terdaftar, tetapi belum memiliki butir soal di database. Ujian tidak dapat dimulai karena soal kosong.`
       });
     }
 
-    // 2. Cek apakah kuis ini terdaftar di cache/memory
-    if (memoryQuizSettings[cleanQuizId]) {
+    // Ambil data setting kuis
+    const settingData = dbSetting || memoryQuizSettings[cleanQuizId] || {
+      quiz_id: cleanQuizId,
+      start_time: null,
+      end_time: null,
+      duration_minutes: 60,
+      max_violations: 3,
+      is_active: true
+    };
+
+    return res.json({
+      status: 'success',
+      exists: true,
+      has_questions: true,
+      data: {
+        quiz_id: settingData.quiz_id,
+        start_time: settingData.start_time,
+        end_time: settingData.end_time,
+        duration_minutes: parseInt(settingData.duration_minutes), // Durasi asli dari DB
+        max_violations: parseInt(settingData.max_violations) || 3,
+        is_active: settingData.is_active !== false,
+        total_questions: totalQuestions
+      }
+    });
+
+  } catch (err) {
+    if (memoryQuizSettings[cleanQuizId] && memoryQuizQuestions[cleanQuizId]) {
       const mem = memoryQuizSettings[cleanQuizId];
       return res.json({
         status: 'success',
         exists: true,
+        has_questions: true,
         data: {
-          quiz_id: mem.quiz_id,
-          start_time: mem.start_time,
-          end_time: mem.end_time,
-          duration_minutes: parseInt(mem.duration_minutes),
-          max_violations: parseInt(mem.max_violations) || 3,
-          is_active: mem.is_active !== false,
-          total_questions: totalQuestions
+          ...mem,
+          total_questions: memoryQuizQuestions[cleanQuizId].length
         }
       });
     }
 
-    // 3. JIKA TIDAK DITEMUKAN: Kembalikan 404 Kuis Tidak Ada!
     return res.status(404).json({
       status: 'error',
       exists: false,
-      message: `ID Kuis "${cleanQuizId}" tidak ditemukan di database. Pastikan nomor kuis benar atau hubungi dosen pengampu.`
-    });
-
-  } catch (err) {
-    // Jika terjadi error server tak terduga, periksa memory terdaftar saja
-    if (memoryQuizSettings[cleanQuizId]) {
-      return res.json({
-        status: 'success',
-        exists: true,
-        data: memoryQuizSettings[cleanQuizId]
-      });
-    }
-
-    return res.status(404).json({
-      status: 'error',
-      exists: false,
-      message: `ID Kuis "${cleanQuizId}" tidak ditemukan.`
+      has_questions: false,
+      total_questions: 0,
+      message: `ID Kuis "${cleanQuizId}" tidak ditemukan di database.`
     });
   }
 });
@@ -409,16 +432,37 @@ app.post('/v1/admin/quiz/settings', authenticate, requireRole('SUPERADMIN', 'DOS
 // Mengambil daftar soal essay kuis
 app.get('/v1/quiz/questions/:quizId', async (req, res) => {
   const { quizId } = req.params;
+  const cleanQuizId = (quizId || '').trim();
+
   try {
     const result = await db.query(
       `SELECT id, question_text, question_type 
        FROM quiz_questions 
        WHERE quiz_id = $1 
        ORDER BY id ASC`,
-      [quizId]
+      [cleanQuizId]
     );
-    res.json({ status: 'success', quizId, data: result.rows });
+
+    if (result.rows.length > 0) {
+      return res.json({ status: 'success', quizId: cleanQuizId, data: result.rows });
+    }
+
+    // Jika DB kosong/offline, periksa memory bank soal resmi
+    if (memoryQuizQuestions[cleanQuizId]) {
+      return res.json({ status: 'success', quizId: cleanQuizId, data: memoryQuizQuestions[cleanQuizId] });
+    }
+
+    // Jika tidak ada soal sama sekali: kembalikan error
+    return res.status(404).json({
+      status: 'error',
+      quizId: cleanQuizId,
+      data: [],
+      message: `Tidak ada butir soal yang ditemukan untuk Kuis #${cleanQuizId}.`
+    });
   } catch (err) {
+    if (memoryQuizQuestions[cleanQuizId]) {
+      return res.json({ status: 'success', quizId: cleanQuizId, data: memoryQuizQuestions[cleanQuizId] });
+    }
     res.status(500).json({ status: 'error', message: err.message });
   }
 });
