@@ -465,64 +465,79 @@
 
       statusBox.classList.remove('d-none');
       statusBox.className = 'alert alert-info py-2 px-3 small mb-3 border-0 shadow-sm';
-      statusText.innerHTML = `Memeriksa ketersediaan kuis <b>${escapeHtml(targetQuiz)}</b>...`;
+      statusText.innerHTML = `⏳ Memeriksa ketersediaan Kuis <b>#${escapeHtml(targetQuiz)}</b> di database...`;
 
       try {
         const res = await fetch(`${API_SETTINGS_URL}/${encodeURIComponent(targetQuiz)}`);
         const json = await res.json();
 
-        if (json.status === 'success' && json.data) {
-          quizSettings = json.data;
-          MAX_VIOLATIONS = quizSettings.max_violations || 3;
-          const duration = quizSettings.duration_minutes || 60;
-          const now = new Date();
-
-          let scheduleMessage = `⏱️ Durasi Ujian: <b>${duration} Menit</b> | Toleransi Pelanggaran: <b>${MAX_VIOLATIONS}x</b><br>`;
-          let isLocked = false;
-
-          // Cek Jam Buka (Start Time)
-          if (quizSettings.start_time) {
-            const startTime = new Date(quizSettings.start_time);
-            if (now < startTime) {
-              isLocked = true;
-              statusBox.className = 'alert alert-warning py-2 px-3 small mb-3 border-0 shadow-sm';
-              scheduleMessage = `🔒 <b>KUIS BELUM DIBUKA!</b><br>Kuis dijadwalkan dibuka pada: <b>${startTime.toLocaleString('id-ID')}</b>. Mohon menunggu waktu ujian tiba.`;
-            } else {
-              scheduleMessage += `✅ Dibuka sejak: ${startTime.toLocaleTimeString('id-ID')}`;
-            }
-          }
-
-          // Cek Jam Tutup (End Time)
-          if (!isLocked && quizSettings.end_time) {
-            const endTime = new Date(quizSettings.end_time);
-            if (now > endTime) {
-              isLocked = true;
-              statusBox.className = 'alert alert-danger py-2 px-3 small mb-3 border-0 shadow-sm';
-              scheduleMessage = `⛔ <b>KUIS TELAH DITUTUP!</b><br>Batas pengerjaan kuis berakhir pada: <b>${endTime.toLocaleString('id-ID')}</b>.`;
-            } else {
-              scheduleMessage += ` | Ditutup pada: <b>${endTime.toLocaleTimeString('id-ID')}</b>`;
-            }
-          }
-
-          if (isLocked) {
-            startBtn.disabled = true;
-            statusText.innerHTML = scheduleMessage;
-            return false;
-          }
-
-          startBtn.disabled = false;
-          statusBox.className = 'alert alert-success py-2 px-3 small mb-3 border-0 shadow-sm';
-          statusText.innerHTML = `🟢 <b>Kuis Terbuka & Siap Dikerjakan!</b><br>${scheduleMessage}`;
-          return true;
+        // JIKA KUIS TIDAK DITEMUKAN DI DATABASE
+        if (!res.ok || json.status !== 'success' || json.exists === false || !json.data) {
+          startBtn.disabled = true;
+          statusBox.className = 'alert alert-danger py-2 px-3 small mb-3 border-0 shadow-sm';
+          statusText.innerHTML = `❌ <b>ID KUIS #${escapeHtml(targetQuiz)} TIDAK DITEMUKAN!</b><br>${escapeHtml(json.message || 'Kuis ini belum terdaftar di database. Silakan periksa kembali nomor kuis Anda.')}`;
+          return false;
         }
-      } catch (err) {
-        console.warn('Gagal ambil jadwal:', err);
-      }
 
-      startBtn.disabled = false;
-      statusBox.className = 'alert alert-secondary py-2 px-3 small mb-3 border-0 shadow-sm';
-      statusText.innerHTML = `🟢 Kuis <b>${escapeHtml(targetQuiz)}</b> siap dikerjakan (Durasi default: 60 Menit | Maks Pelanggaran: ${MAX_VIOLATIONS}x).`;
-      return true;
+        // KUIS DITEMUKAN: Ambil data riil dari database (Bukan Hardcoded)
+        quizSettings = json.data;
+        MAX_VIOLATIONS = parseInt(quizSettings.max_violations) || 3;
+        const duration = parseInt(quizSettings.duration_minutes) || 60; // Durasi ASLI dari database
+        const now = new Date();
+
+        let scheduleMessage = `⏱️ Durasi Ujian: <b>${duration} Menit</b> (sesuai database) | Toleransi Pelanggaran: <b>${MAX_VIOLATIONS}x</b><br>`;
+        let isLocked = false;
+
+        // Cek apakah kuis dinonaktifkan oleh admin
+        if (quizSettings.is_active === false) {
+          isLocked = true;
+          statusBox.className = 'alert alert-danger py-2 px-3 small mb-3 border-0 shadow-sm';
+          scheduleMessage = `🔒 <b>KUIS NONAKTIF!</b><br>Kuis #${escapeHtml(targetQuiz)} saat ini dinonaktifkan oleh dosen/admin pengampu.`;
+        }
+
+        // Cek Jam Buka (Start Time) dari database
+        if (!isLocked && quizSettings.start_time) {
+          const startTime = new Date(quizSettings.start_time);
+          if (now < startTime) {
+            isLocked = true;
+            statusBox.className = 'alert alert-warning py-2 px-3 small mb-3 border-0 shadow-sm';
+            scheduleMessage = `🔒 <b>KUIS BELUM DIBUKA!</b><br>Kuis dijadwalkan dibuka pada: <b>${startTime.toLocaleString('id-ID')}</b>. Mohon menunggu waktu ujian tiba.`;
+          } else {
+            scheduleMessage += `✅ Dibuka sejak: ${startTime.toLocaleTimeString('id-ID')}`;
+          }
+        }
+
+        // Cek Jam Tutup (End Time) dari database
+        if (!isLocked && quizSettings.end_time) {
+          const endTime = new Date(quizSettings.end_time);
+          if (now > endTime) {
+            isLocked = true;
+            statusBox.className = 'alert alert-danger py-2 px-3 small mb-3 border-0 shadow-sm';
+            scheduleMessage = `⛔ <b>KUIS TELAH DITUTUP!</b><br>Batas pengerjaan kuis telah berakhir pada: <b>${endTime.toLocaleString('id-ID')}</b>.`;
+          } else {
+            scheduleMessage += ` | Ditutup pada: <b>${endTime.toLocaleTimeString('id-ID')}</b>`;
+          }
+        }
+
+        if (isLocked) {
+          startBtn.disabled = true;
+          statusText.innerHTML = scheduleMessage;
+          return false;
+        }
+
+        // Kuis valid, ada di database, dan jadwal terbuka
+        startBtn.disabled = false;
+        statusBox.className = 'alert alert-success py-2 px-3 small mb-3 border-0 shadow-sm';
+        statusText.innerHTML = `🟢 <b>Kuis Terdaftar & Siap Dikerjakan!</b><br>${scheduleMessage}`;
+        return true;
+
+      } catch (err) {
+        console.warn('Gagal verifikasi kuis ke server:', err);
+        startBtn.disabled = true;
+        statusBox.className = 'alert alert-danger py-2 px-3 small mb-3 border-0 shadow-sm';
+        statusText.innerHTML = `⚠️ <b>Gagal Menghubungi Server:</b> Tidak dapat memverifikasi ID Kuis #${escapeHtml(targetQuiz)}. Pastikan server menyala.`;
+        return false;
+      }
     }
 
     // --- PROSES LOGIN PESERTA & MEMULAI UJIAN ---
@@ -686,13 +701,23 @@
         console.warn('Gagal menghubungi API soal, beralih ke bank soal cadangan:', err);
       }
 
-      // Jika dari DB belum ada soal, ambil dari fallback bank soal
+      // Jika dari DB belum ada soal, periksa apakah kuis memiliki soal cadangan
       if (questions.length === 0) {
-        questions = FALLBACK_QUESTION_BANKS[targetQuizId] || [
-          { id: 1, question_text: `Soal 1 untuk kuis ${targetQuizId}: Jelaskan konsep dan tujuan utama topik ini!` },
-          { id: 2, question_text: `Soal 2 untuk kuis ${targetQuizId}: Berikan contoh implementasi praktis dan analisis keunggulannya!` }
-        ];
-        fallbackAlertEl.classList.remove('d-none');
+        if (FALLBACK_QUESTION_BANKS[targetQuizId]) {
+          questions = FALLBACK_QUESTION_BANKS[targetQuizId];
+          fallbackAlertEl.classList.remove('d-none');
+        } else {
+          loadingEl.classList.add('d-none');
+          listEl.innerHTML = `
+            <div class="alert alert-warning text-center py-4 my-3 border-0 shadow-sm" style="border-radius: 12px;">
+              <h5 class="fw-bold mb-2">⚠️ Soal Ujian Belum Tersedia</h5>
+              <p class="mb-0 text-muted">Dosen atau admin pengampu belum mengunggah butir soal untuk <b>Kuis #${escapeHtml(targetQuizId)}</b> di database.<br>Silakan hubungi pengawas atau dosen pengampu Anda.</p>
+            </div>
+          `;
+          document.getElementById('btn-submit').classList.add('d-none');
+          formEl.classList.remove('d-none');
+          return;
+        }
       }
 
       renderQuestions(questions);

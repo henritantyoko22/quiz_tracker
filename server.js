@@ -242,40 +242,115 @@ app.get('/v1/quiz/list', async (req, res) => {
   }
 });
 
-// Mengambil pengaturan jadwal, jam buka-tutup, dan durasi timer kuis
+// Mengambil pengaturan jadwal, jam buka-tutup, dan durasi timer kuis dari DATABASE
 app.get('/v1/quiz/settings/:quizId', async (req, res) => {
   const { quizId } = req.params;
-  try {
-    const result = await db.query(
-      `SELECT quiz_id, start_time, end_time, duration_minutes, max_violations, is_active 
-       FROM quiz_settings 
-       WHERE quiz_id = $1`,
-      [quizId]
-    );
+  const cleanQuizId = (quizId || '').trim();
 
-    if (result.rows.length > 0) {
-      return res.json({ status: 'success', data: result.rows[0] });
+  if (!cleanQuizId) {
+    return res.status(400).json({ status: 'error', exists: false, message: 'ID Kuis wajib diisi.' });
+  }
+
+  try {
+    // 1. Cek tabel quiz_settings di database
+    let dbSetting = null;
+    let totalQuestions = 0;
+
+    try {
+      const settingResult = await db.query(
+        `SELECT quiz_id, start_time, end_time, duration_minutes, max_violations, is_active 
+         FROM quiz_settings 
+         WHERE quiz_id = $1`,
+        [cleanQuizId]
+      );
+      if (settingResult.rows.length > 0) {
+        dbSetting = settingResult.rows[0];
+      }
+
+      // Cek jumlah soal yang tersedia untuk kuis ini di DB
+      const qResult = await db.query(
+        `SELECT COUNT(*) AS total FROM quiz_questions WHERE quiz_id = $1`,
+        [cleanQuizId]
+      );
+      totalQuestions = parseInt(qResult.rows[0]?.total || 0);
+    } catch (dbErr) {
+      console.warn('DB query error on quiz settings:', dbErr.message);
     }
 
-    const fallback = memoryQuizSettings[quizId] || {
-      quiz_id: quizId,
-      start_time: null,
-      end_time: null,
-      duration_minutes: 60,
-      max_violations: 3,
-      is_active: true
-    };
-    res.json({ status: 'success', data: fallback });
+    // Jika setting ditemukan di database
+    if (dbSetting) {
+      return res.json({
+        status: 'success',
+        exists: true,
+        data: {
+          quiz_id: dbSetting.quiz_id,
+          start_time: dbSetting.start_time,
+          end_time: dbSetting.end_time,
+          duration_minutes: parseInt(dbSetting.duration_minutes), // Nilai riil dari DB, BUKAN hardcode
+          max_violations: parseInt(dbSetting.max_violations) || 3,
+          is_active: dbSetting.is_active !== false,
+          total_questions: totalQuestions
+        }
+      });
+    }
+
+    // Jika di quiz_settings belum ada row tetapi di quiz_questions ada soalnya
+    if (totalQuestions > 0) {
+      return res.json({
+        status: 'success',
+        exists: true,
+        data: {
+          quiz_id: cleanQuizId,
+          start_time: null,
+          end_time: null,
+          duration_minutes: 60,
+          max_violations: 3,
+          is_active: true,
+          total_questions: totalQuestions
+        }
+      });
+    }
+
+    // 2. Cek apakah kuis ini terdaftar di cache/memory
+    if (memoryQuizSettings[cleanQuizId]) {
+      const mem = memoryQuizSettings[cleanQuizId];
+      return res.json({
+        status: 'success',
+        exists: true,
+        data: {
+          quiz_id: mem.quiz_id,
+          start_time: mem.start_time,
+          end_time: mem.end_time,
+          duration_minutes: parseInt(mem.duration_minutes),
+          max_violations: parseInt(mem.max_violations) || 3,
+          is_active: mem.is_active !== false,
+          total_questions: totalQuestions
+        }
+      });
+    }
+
+    // 3. JIKA TIDAK DITEMUKAN: Kembalikan 404 Kuis Tidak Ada!
+    return res.status(404).json({
+      status: 'error',
+      exists: false,
+      message: `ID Kuis "${cleanQuizId}" tidak ditemukan di database. Pastikan nomor kuis benar atau hubungi dosen pengampu.`
+    });
+
   } catch (err) {
-    const fallback = memoryQuizSettings[quizId] || {
-      quiz_id: quizId,
-      start_time: null,
-      end_time: null,
-      duration_minutes: 60,
-      max_violations: 3,
-      is_active: true
-    };
-    res.json({ status: 'success', data: fallback });
+    // Jika terjadi error server tak terduga, periksa memory terdaftar saja
+    if (memoryQuizSettings[cleanQuizId]) {
+      return res.json({
+        status: 'success',
+        exists: true,
+        data: memoryQuizSettings[cleanQuizId]
+      });
+    }
+
+    return res.status(404).json({
+      status: 'error',
+      exists: false,
+      message: `ID Kuis "${cleanQuizId}" tidak ditemukan.`
+    });
   }
 });
 
