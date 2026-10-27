@@ -54,66 +54,6 @@ const initialUsers = [
 // Fallback in-memory jika database PostgreSQL offline
 let memoryUsers = [...initialUsers];
 
-// Penyimpanan cadangan (in-memory) untuk Pengaturan Jadwal & Timer Kuis
-const memoryQuizSettings = {
-  '101': {
-    quiz_id: '101',
-    start_time: null,
-    end_time: null,
-    duration_minutes: 60,
-    max_violations: 3,
-    is_active: true
-  },
-  '1': {
-    quiz_id: '1',
-    start_time: null,
-    end_time: null,
-    duration_minutes: 45,
-    max_violations: 3,
-    is_active: true
-  },
-  'ESSAY_WEB_DEV': {
-    quiz_id: 'ESSAY_WEB_DEV',
-    start_time: null,
-    end_time: null,
-    duration_minutes: 60,
-    max_violations: 3,
-    is_active: true
-  },
-  'ESSAY_PEMROGRAMAN': {
-    quiz_id: 'ESSAY_PEMROGRAMAN',
-    start_time: null,
-    end_time: null,
-    duration_minutes: 45,
-    max_violations: 3,
-    is_active: true
-  }
-};
-
-// Bank Soal Bawaan di Memory Server (untuk kuis terdaftar)
-const memoryQuizQuestions = {
-  '101': [
-    { id: 1, question_text: 'Jelaskan arsitektur middleware pada Express.js dan bagaimana urutan eksekusinya mempengaruhi aliran data request-response!', question_type: 'ESSAY' },
-    { id: 2, question_text: 'Mengapa proteksi kuis berbasis website (seperti Fullscreen API & visibilitychange) lebih efektif dibandingkan Chrome Extension?', question_type: 'ESSAY' },
-    { id: 3, question_text: 'Jelaskan bagaimana konsep CORS (Cross-Origin Resource Sharing) bekerja dan cara menanganinya di backend Node.js!', question_type: 'ESSAY' }
-  ],
-  '1': [
-    { id: 1, question_text: 'Jelaskan konsep dasar Event Loop pada Node.js beserta tahapan phases-nya!', question_type: 'ESSAY' },
-    { id: 2, question_text: 'Apa perbedaan antara Synchronous vs Asynchronous programming pada JavaScript modern?', question_type: 'ESSAY' },
-    { id: 3, question_text: 'Jelaskan kegunaan Connection Pool pada database PostgreSQL dan mengapa penting untuk performa aplikasi!', question_type: 'ESSAY' }
-  ],
-  'ESSAY_WEB_DEV': [
-    { id: 1, question_text: 'Jelaskan arsitektur middleware pada Express.js dan bagaimana urutan eksekusinya mempengaruhi aliran data request-response!', question_type: 'ESSAY' },
-    { id: 2, question_text: 'Mengapa proteksi kuis berbasis website (seperti Fullscreen API & visibilitychange) lebih efektif dibandingkan Chrome Extension?', question_type: 'ESSAY' },
-    { id: 3, question_text: 'Jelaskan bagaimana konsep CORS (Cross-Origin Resource Sharing) bekerja dan cara menanganinya di backend Node.js!', question_type: 'ESSAY' }
-  ],
-  'ESSAY_PEMROGRAMAN': [
-    { id: 1, question_text: 'Jelaskan konsep dasar Event Loop pada Node.js beserta tahapan phases-nya!', question_type: 'ESSAY' },
-    { id: 2, question_text: 'Apa perbedaan antara Synchronous vs Asynchronous programming pada JavaScript modern?', question_type: 'ESSAY' },
-    { id: 3, question_text: 'Jelaskan kegunaan Connection Pool pada database PostgreSQL dan mengapa penting untuk performa aplikasi!', question_type: 'ESSAY' }
-  ]
-};
-
 // Sesi Login Aktif (Token -> User Data)
 const activeSessions = new Map();
 
