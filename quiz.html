@@ -78,7 +78,7 @@
             <div class="mb-3">
               <label class="form-label fw-bold">ID / Kode Kuis</label>
               <div class="input-group">
-                <input type="text" id="input-quiz-id" class="form-control" placeholder="Contoh: ESSAY_WEB_DEV" value="ESSAY_WEB_DEV" required>
+                <input type="text" id="input-quiz-id" class="form-control" placeholder="" value="" required>
                 <button type="button" class="btn btn-outline-secondary" onclick="checkScheduleInfo()">Cek Jadwal</button>
               </div>
               <div class="form-text small">Atau gunakan parameter URL <code>?quizId=...</code></div>
@@ -185,7 +185,7 @@
     const API_QUESTIONS_URL = `${API_BASE}/v1/quiz/questions`;
     const API_SETTINGS_URL = `${API_BASE}/v1/quiz/settings`;
 
-    let userNama = '', userNim = '', quizId = 'ESSAY_WEB_DEV';
+    let userNama = '', userNim = '', quizId = '';
     let isLoggedIn = false;
     let MAX_VIOLATIONS = 3;
     let violationCount = 0;
@@ -298,7 +298,7 @@
       e.preventDefault();
       userNama = document.getElementById('input-nama').value.trim();
       userNim = document.getElementById('input-nim').value.trim();
-      quizId = document.getElementById('input-quiz-id').value.trim() || 'ESSAY_WEB_DEV';
+      quizId = document.getElementById('input-quiz-id').value.trim() || '';
 
       if (!userNama || !userNim) {
         alert('Nama dan NIM wajib diisi!');
