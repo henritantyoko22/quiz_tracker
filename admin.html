@@ -123,9 +123,13 @@
 
       statusEl.textContent = 'Mengunggah soal...';
       try {
+        const token = localStorage.getItem('admin_token') || '';
         const res = await fetch(`${API_BASE}/v1/admin/questions/import`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
           body: JSON.stringify({ quizId, questions })
         });
         const data = await res.json();

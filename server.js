@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const crypto = require('crypto');
 const db = require('./db'); // Konfigurasi koneksi PostgreSQL Neon.tech
 
 const app = express();
@@ -10,11 +11,54 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(__dirname));
 
+// -------------------------------------------------------------
+// HELPER PASSWORD HASHING (PBKDF2 + SALT)
+// -------------------------------------------------------------
+function hashPassword(password, salt = crypto.randomBytes(16).toString('hex')) {
+  const hash = crypto.pbkdf2Sync(password, salt, 10000, 64, 'sha512').toString('hex');
+  return { hash, salt };
+}
+
+function verifyPassword(password, storedHash, salt) {
+  if (!password || !storedHash || !salt) return false;
+  const hash = crypto.pbkdf2Sync(password, salt, 10000, 64, 'sha512').toString('hex');
+  return hash === storedHash;
+}
+
+// Akun bawaan (Seeded Default Users)
+const defaultSalt = 'salt_quiz_tracker_2026';
+const initialUsers = [
+  {
+    username: 'admin',
+    password_hash: crypto.pbkdf2Sync('admin123', defaultSalt, 10000, 64, 'sha512').toString('hex'),
+    salt: defaultSalt,
+    full_name: 'Super Administrator',
+    role: 'SUPERADMIN'
+  },
+  {
+    username: 'dosen',
+    password_hash: crypto.pbkdf2Sync('dosen123', defaultSalt, 10000, 64, 'sha512').toString('hex'),
+    salt: defaultSalt,
+    full_name: 'Dr. Dosen Pengampu',
+    role: 'DOSEN'
+  },
+  {
+    username: 'pengawas',
+    password_hash: crypto.pbkdf2Sync('pengawas123', defaultSalt, 10000, 64, 'sha512').toString('hex'),
+    salt: defaultSalt,
+    full_name: 'Pengawas Ujian (Proctor)',
+    role: 'PROCTOR'
+  }
+];
+
+// Fallback in-memory jika database PostgreSQL offline
+let memoryUsers = [...initialUsers];
+
 // Penyimpanan cadangan (in-memory) untuk Pengaturan Jadwal & Timer Kuis
 const memoryQuizSettings = {
   'ESSAY_WEB_DEV': {
     quiz_id: 'ESSAY_WEB_DEV',
-    start_time: null, // null = bisa diakses kapan saja
+    start_time: null,
     end_time: null,
     duration_minutes: 60,
     max_violations: 3,
@@ -30,10 +74,91 @@ const memoryQuizSettings = {
   }
 };
 
+// Sesi Login Aktif (Token -> User Data)
+const activeSessions = new Map();
+
+// Middleware Autentikasi & Verifikasi Token
+function authenticate(req, res, next) {
+  const authHeader = req.headers['authorization'] || req.headers['x-admin-token'];
+  const token = authHeader ? authHeader.replace(/^Bearer\s+/i, '').trim() : null;
+
+  if (!token) {
+    return res.status(401).json({ status: 'error', message: 'Akses ditolak: Token autentikasi tidak ditemukan.' });
+  }
+
+  // Khusus fallback token kompatibilitas lama jika dibutuhkan
+  if (token === 'secret-admin-token-2026') {
+    req.adminUser = {
+      userId: 1,
+      username: 'admin',
+      fullName: 'Super Administrator',
+      role: 'SUPERADMIN'
+    };
+    return next();
+  }
+
+  const session = activeSessions.get(token);
+  if (!session) {
+    return res.status(401).json({ status: 'error', message: 'Sesi login telah berakhir atau tidak valid. Silakan login kembali.' });
+  }
+
+  req.adminUser = session;
+  next();
+}
+
+// Middleware Pembatasan Hak Akses Berdasarkan Role
+function requireRole(...allowedRoles) {
+  return (req, res, next) => {
+    if (!req.adminUser) {
+      return res.status(401).json({ status: 'error', message: 'Autentikasi diperlukan.' });
+    }
+    // SUPERADMIN selalu memiliki akses ke seluruh fitur
+    if (req.adminUser.role === 'SUPERADMIN' || allowedRoles.includes(req.adminUser.role)) {
+      return next();
+    }
+    return res.status(403).json({
+      status: 'error',
+      message: `Akses ditolak! Fitur ini membutuhkan role: [${allowedRoles.join(', ')}]. Role Anda saat ini: ${req.adminUser.role}`
+    });
+  };
+}
+
 // Inisialisasi otomatis tabel & kolom baru di database jika belum ada
 async function initDbTables() {
   try {
-    // 1. Buat tabel quiz_settings untuk timer & jam buka/tutup
+    // 1. Tabel admin_users (Manajemen Role & Kredensial Hashed)
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS admin_users (
+        id SERIAL PRIMARY KEY,
+        username VARCHAR(50) UNIQUE NOT NULL,
+        password_hash VARCHAR(255) NOT NULL,
+        salt VARCHAR(64) NOT NULL,
+        full_name VARCHAR(100) NOT NULL,
+        role VARCHAR(30) NOT NULL DEFAULT 'DOSEN',
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+
+    // Seed akun bawaan jika tabel masih kosong
+    try {
+      const userCheck = await db.query('SELECT COUNT(*) AS count FROM admin_users');
+      if (parseInt(userCheck.rows[0].count) === 0) {
+        for (const u of initialUsers) {
+          await db.query(
+            `INSERT INTO admin_users (username, password_hash, salt, full_name, role)
+             VALUES ($1, $2, $3, $4, $5)
+             ON CONFLICT (username) DO NOTHING`,
+            [u.username, u.password_hash, u.salt, u.full_name, u.role]
+          );
+        }
+        console.log('✅ Seed akun admin awal (admin, dosen, pengawas) berhasil dibuat di PostgreSQL.');
+      }
+    } catch (e) {
+      console.warn('ℹ️ Seed akun DB:', e.message);
+    }
+
+    // 2. Buat tabel quiz_settings untuk timer & jam buka/tutup
     await db.query(`
       CREATE TABLE IF NOT EXISTS quiz_settings (
         quiz_id VARCHAR(100) PRIMARY KEY,
@@ -46,7 +171,7 @@ async function initDbTables() {
       );
     `);
 
-    // 2. Tambahkan kolom violation_count & max_violations di quiz_submissions
+    // 3. Tambahkan kolom violation_count & max_violations di quiz_submissions
     await db.query(`
       ALTER TABLE quiz_submissions 
       ADD COLUMN IF NOT EXISTS violation_count INT DEFAULT 0;
@@ -55,7 +180,7 @@ async function initDbTables() {
       ALTER TABLE quiz_submissions 
       ADD COLUMN IF NOT EXISTS max_violations INT DEFAULT 3;
     `);
-    console.log('✅ Inisialisasi struktur database PostgreSQL sukses.');
+    console.log('✅ Struktur database terverifikasi lengkap.');
   } catch (err) {
     console.warn('ℹ️ Inisialisasi tabel/kolom DB:', err.message);
   }
@@ -118,8 +243,8 @@ app.get('/v1/quiz/settings/:quizId', async (req, res) => {
   }
 });
 
-// Menyimpan/memperbarui pengaturan jadwal & timer (Admin)
-app.post('/v1/admin/quiz/settings', async (req, res) => {
+// Menyimpan/memperbarui pengaturan jadwal & timer (Hanya SUPERADMIN & DOSEN)
+app.post('/v1/admin/quiz/settings', authenticate, requireRole('SUPERADMIN', 'DOSEN'), async (req, res) => {
   const { quizId, startTime, endTime, durationMinutes, maxViolations, isActive } = req.body;
 
   if (!quizId) {
@@ -211,7 +336,6 @@ app.post('/v1/quiz/submit', async (req, res) => {
         [userId, nim, quizId, JSON.stringify(answers), status || 'COMPLETED', vCount, maxV]
       );
     } catch (insertColErr) {
-      // Jika kolom violation_count belum ada di PostgreSQL, fallback ke query lama
       result = await db.query(
         `INSERT INTO quiz_submissions (user_id, nim, quiz_id, answers, status, submitted_at)
          VALUES ($1, $2, $3, $4, $5, NOW())
@@ -242,22 +366,159 @@ app.post('/v1/violations', async (req, res) => {
 });
 
 // -------------------------------------------------------------
-// 2. ENDPOINT ADMIN (LOGIN, SUBMISSIONS, DETAIL PELANGGARAN, GRADING)
+// 2. ENDPOINT AUTENTIKASI & MANAJEMEN ROLE PENGGUNA
 // -------------------------------------------------------------
 
-app.post('/v1/admin/login', (req, res) => {
+// Login Admin dengan Verifikasi Password Hash Dinamis (Bukan Hardcoded)
+app.post('/v1/admin/login', async (req, res) => {
   const { username, password } = req.body;
-  if (username === 'admin' && password === 'admin123') {
-    res.json({ status: 'success', token: 'secret-admin-token-2026' });
-  } else {
-    res.status(401).json({ status: 'error', message: 'Username atau password salah!' });
+  if (!username || !password) {
+    return res.status(400).json({ status: 'error', message: 'Username dan password wajib diisi!' });
+  }
+
+  const cleanUser = username.trim().toLowerCase();
+
+  try {
+    let user = null;
+
+    // 1. Cek di tabel PostgreSQL admin_users
+    try {
+      const result = await db.query(
+        'SELECT id, username, password_hash, salt, full_name, role FROM admin_users WHERE LOWER(username) = $1',
+        [cleanUser]
+      );
+      if (result.rows.length > 0) {
+        user = result.rows[0];
+      }
+    } catch (dbErr) {
+      console.warn('DB login query error, checking memory:', dbErr.message);
+    }
+
+    // 2. Cek memori fallback jika DB tidak mengembalikan hasil
+    if (!user) {
+      user = memoryUsers.find(u => u.username.toLowerCase() === cleanUser);
+    }
+
+    if (!user) {
+      return res.status(401).json({ status: 'error', message: 'Username atau password salah!' });
+    }
+
+    // Verifikasi Password Hash
+    const isValid = verifyPassword(password, user.password_hash, user.salt);
+    if (!isValid) {
+      return res.status(401).json({ status: 'error', message: 'Username atau password salah!' });
+    }
+
+    // Buat session token acak & aman
+    const token = crypto.randomBytes(32).toString('hex');
+    const sessionData = {
+      userId: user.id || 1,
+      username: user.username,
+      fullName: user.full_name,
+      role: user.role || 'DOSEN',
+      loginAt: new Date()
+    };
+    activeSessions.set(token, sessionData);
+
+    res.json({
+      status: 'success',
+      token,
+      user: {
+        username: user.username,
+        fullName: user.full_name,
+        role: user.role || 'DOSEN'
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ status: 'error', message: 'Terjadi kesalahan server: ' + err.message });
   }
 });
 
-// Rekap jawaban mahasiswa lengkap dengan laporan pelanggaran (berapa dari berapa)
-app.get('/v1/admin/submissions', async (req, res) => {
+// Cek profil login saat ini
+app.get('/v1/admin/me', authenticate, (req, res) => {
+  res.json({ status: 'success', user: req.adminUser });
+});
+
+// Daftar akun admin/dosen (Hanya untuk SUPERADMIN)
+app.get('/v1/admin/users', authenticate, requireRole('SUPERADMIN'), async (req, res) => {
   try {
-    // Gabungkan data submission dengan hitungan pelanggaran nyata dari quiz_violations
+    const result = await db.query(
+      'SELECT id, username, full_name, role, created_at FROM admin_users ORDER BY id ASC'
+    );
+    res.json({ status: 'success', data: result.rows });
+  } catch (err) {
+    const safeUsers = memoryUsers.map((u, i) => ({
+      id: u.id || i + 1,
+      username: u.username,
+      full_name: u.full_name,
+      role: u.role,
+      created_at: new Date()
+    }));
+    res.json({ status: 'success', data: safeUsers });
+  }
+});
+
+// Tambah akun admin/dosen baru (Hanya untuk SUPERADMIN)
+app.post('/v1/admin/users', authenticate, requireRole('SUPERADMIN'), async (req, res) => {
+  const { username, password, fullName, role } = req.body;
+  if (!username || !password || !fullName) {
+    return res.status(400).json({ status: 'error', message: 'Username, password, dan nama lengkap wajib diisi!' });
+  }
+
+  const cleanUser = username.trim().toLowerCase();
+  const validRoles = ['SUPERADMIN', 'DOSEN', 'PROCTOR'];
+  const userRole = validRoles.includes(role) ? role : 'DOSEN';
+  const { hash, salt } = hashPassword(password);
+
+  try {
+    const result = await db.query(
+      `INSERT INTO admin_users (username, password_hash, salt, full_name, role)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id, username, full_name, role, created_at`,
+      [cleanUser, hash, salt, fullName.trim(), userRole]
+    );
+
+    memoryUsers.push({
+      id: result.rows[0].id,
+      username: cleanUser,
+      password_hash: hash,
+      salt: salt,
+      full_name: fullName.trim(),
+      role: userRole
+    });
+
+    res.json({ status: 'success', message: `Pengguna "${cleanUser}" berhasil ditambahkan!`, data: result.rows[0] });
+  } catch (err) {
+    if (err.code === '23505') {
+      return res.status(400).json({ status: 'error', message: `Username "${username}" sudah digunakan!` });
+    }
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+});
+
+// Hapus akun admin (Hanya untuk SUPERADMIN, tidak bisa menghapus diri sendiri)
+app.delete('/v1/admin/users/:id', authenticate, requireRole('SUPERADMIN'), async (req, res) => {
+  const targetId = parseInt(req.params.id);
+  if (req.adminUser.userId === targetId) {
+    return res.status(400).json({ status: 'error', message: 'Tidak dapat menghapus akun Anda sendiri yang sedang aktif!' });
+  }
+
+  try {
+    await db.query('DELETE FROM admin_users WHERE id = $1', [targetId]);
+    memoryUsers = memoryUsers.filter(u => u.id !== targetId);
+    res.json({ status: 'success', message: 'Akun berhasil dihapus.' });
+  } catch (err) {
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+});
+
+// -------------------------------------------------------------
+// 3. ENDPOINT REKAPITULASI, PENILAIAN & IMPOR SOAL
+// -------------------------------------------------------------
+
+// Rekap jawaban mahasiswa lengkap dengan laporan pelanggaran
+app.get('/v1/admin/submissions', authenticate, async (req, res) => {
+  try {
     const query = `
       SELECT 
         s.id, 
@@ -288,7 +549,6 @@ app.get('/v1/admin/submissions', async (req, res) => {
     const result = await db.query(query);
     res.json({ status: 'success', data: result.rows });
   } catch (err) {
-    // Fallback jika database belum mendukung subquery string_agg
     try {
       const fallback = await db.query(
         `SELECT id, user_id AS nama, nim, quiz_id, answers, status, grade, feedback, submitted_at,
@@ -304,7 +564,7 @@ app.get('/v1/admin/submissions', async (req, res) => {
 });
 
 // Detail audit log pelanggaran per mahasiswa
-app.get('/v1/admin/violations/detail', async (req, res) => {
+app.get('/v1/admin/violations/detail', authenticate, async (req, res) => {
   const { userId, nim, quizId } = req.query;
   try {
     const result = await db.query(
@@ -320,7 +580,8 @@ app.get('/v1/admin/violations/detail', async (req, res) => {
   }
 });
 
-app.post('/v1/admin/submissions/grade', async (req, res) => {
+// Penilaian (Grading) - Hanya SUPERADMIN & DOSEN (PROCTOR tidak boleh menilai)
+app.post('/v1/admin/submissions/grade', authenticate, requireRole('SUPERADMIN', 'DOSEN'), async (req, res) => {
   const { submissionId, grade, feedback } = req.body;
   try {
     const result = await db.query(
@@ -336,7 +597,8 @@ app.post('/v1/admin/submissions/grade', async (req, res) => {
   }
 });
 
-app.post('/v1/admin/questions/import', async (req, res) => {
+// Impor Soal Baru - Hanya SUPERADMIN & DOSEN
+app.post('/v1/admin/questions/import', authenticate, requireRole('SUPERADMIN', 'DOSEN'), async (req, res) => {
   const { quizId, questions } = req.body;
   try {
     for (const q of questions) {
@@ -358,6 +620,4 @@ app.get('/admin', (req, res) => res.sendFile(path.join(__dirname, 'admin.html'))
 app.get('/admin-dashboard', (req, res) => res.sendFile(path.join(__dirname, 'admin-dashboard.html')));
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
-
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => console.log(`Server API berjalan di port ${PORT}`));
