@@ -15,6 +15,16 @@
       .card { border: none !important; box-shadow: none !important; }
       .table-responsive { overflow: visible !important; }
     }
+    /* Style Live Monitor */
+    #live-monitor-panel { display: none; }
+    #live-monitor-panel.active { display: block; }
+    .live-row { cursor: pointer; transition: background-color 0.15s ease; }
+    .live-row:hover { background-color: rgba(220, 53, 69, 0.08) !important; }
+    .pulse-live { animation: pulseLiveAnim 1.2s ease-in-out infinite alternate; }
+    @keyframes pulseLiveAnim { 0% { opacity: 1; transform: scale(1); } 100% { opacity: 0.55; transform: scale(1.04); } }
+    .timeline-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+    .q-bar-bg { background-color: #e9ecef; border-radius: 6px; height: 10px; overflow: hidden; }
+    .q-bar-fill { height: 100%; border-radius: 6px; transition: width 0.3s ease; }
   </style>
 </head>
 <body class="bg-light p-3 p-md-4">
@@ -81,6 +91,11 @@
         <!-- Tombol Manajemen User (Hanya Superadmin) -->
         <button id="btn-manage-users" onclick="openUsersModal()" class="btn btn-outline-danger btn-sm fw-bold d-none">
           👥 Manajemen User
+        </button>
+
+        <!-- Tombol Live Monitor Realtime (Superadmin & Proctor) -->
+        <button id="btn-live-monitor" onclick="toggleLiveMonitor()" class="btn btn-outline-danger btn-sm fw-bold d-none position-relative">
+          🔴 Live Monitor <span id="topbar-live-count" class="badge bg-danger ms-1 d-none">0</span>
         </button>
 
         <!-- Dropdown Ekspor Data Jawaban -->
@@ -208,6 +223,7 @@
         <table class="table table-hover align-middle mb-0" id="main-table">
           <thead class="table-dark">
             <tr>
+              <th style="width: 48px; text-align: center;">No.</th>
               <th onclick="toggleSort('nim')" class="cursor-pointer" style="min-width: 120px;" title="Klik untuk mengurutkan">
                 NIM <span id="sort-nim" class="sort-icon">↕</span>
               </th>
@@ -233,9 +249,156 @@
             </tr>
           </thead>
           <tbody id="submission-table">
-            <tr><td colspan="8" class="text-center py-4">Memuat data terbaru...</td></tr>
+            <tr><td colspan="9" class="text-center py-4">Memuat data terbaru...</td></tr>
           </tbody>
         </table>
+      </div>
+    </div>
+
+    <!-- PANEL PENGAWASAN LIVE UJIAN (SUPERADMIN & PENGAWAS) -->
+    <div id="live-monitor-panel" class="card p-3 shadow border-danger mb-4 bg-white no-print mt-3">
+      <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2 pb-2 border-bottom">
+        <div>
+          <div class="d-flex align-items-center gap-2">
+            <h5 class="fw-bold m-0 text-danger">🔴 Live Monitoring Ujian Berlangsung</h5>
+            <span class="badge bg-danger pulse-live">LIVE REALTIME</span>
+          </div>
+          <small class="text-muted" id="live-monitor-subtitle">
+            Memantau pengerjaan mahasiswa secara real-time (Auto-refresh setiap 5 detik)
+          </small>
+        </div>
+
+        <div class="d-flex align-items-center gap-2">
+          <span class="badge bg-light text-dark border">
+            🟢 Aktif Mengerjakan: <b id="live-count-active" class="text-success">0</b>
+          </span>
+          <span class="badge bg-light text-dark border">
+            🏁 Selesai / Submit: <b id="live-count-finished" class="text-primary">0</b>
+          </span>
+          <button class="btn btn-sm btn-outline-secondary" onclick="loadLiveSessions()">
+            🔄 Segarkan
+          </button>
+          <button class="btn btn-sm btn-outline-danger" onclick="toggleLiveMonitor()">
+            ✕ Sembunyikan Panel
+          </button>
+        </div>
+      </div>
+
+      <!-- Tabel Live Peserta -->
+      <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0" id="live-sessions-table">
+          <thead class="table-danger">
+            <tr>
+              <th style="width: 48px; text-align: center;">No.</th>
+              <th style="min-width: 160px;">Nama Mahasiswa</th>
+              <th style="min-width: 120px;">NIM</th>
+              <th style="min-width: 110px;">Kuis</th>
+              <th style="min-width: 150px;">Status Ujian</th>
+              <th style="min-width: 220px;">Posisi Soal Saat Ini</th>
+              <th style="min-width: 130px;">Waktu di Soal Ini</th>
+              <th style="min-width: 120px;">Total Waktu</th>
+              <th style="min-width: 110px;">Sisa Waktu</th>
+              <th style="min-width: 100px;">Pelanggaran</th>
+              <th style="min-width: 130px;">Update Terakhir</th>
+              <th style="min-width: 110px; text-align: center;">Aksi</th>
+            </tr>
+          </thead>
+          <tbody id="live-sessions-tbody">
+            <tr>
+              <td colspan="12" class="text-center text-muted py-4">
+                Belum ada peserta yang aktif mengerjakan ujian saat ini. Begitu mahasiswa menekan "Mulai Ujian", sesi mereka akan otomatis muncul di sini.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL DETAIL AUDIT LOG PENGERJAAN SISWA (TIMELINE WAKTU PER SOAL) -->
+  <div class="modal fade" id="liveDetailModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered modal-xl">
+      <div class="modal-content border-0 shadow">
+        <div class="modal-header bg-danger text-white">
+          <h5 class="modal-title fw-bold">⏱️ Detail Log Pengerjaan Ujian Mahasiswa</h5>
+          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body p-4">
+          <!-- Info Kartu Peserta -->
+          <div class="row g-2 mb-3">
+            <div class="col-md-3">
+              <div class="p-2 bg-light border rounded">
+                <small class="text-muted d-block fw-bold" style="font-size: 11px;">NAMA MAHASISWA</small>
+                <span class="fw-bold" id="live-detail-nama">-</span>
+              </div>
+            </div>
+            <div class="col-md-2">
+              <div class="p-2 bg-light border rounded">
+                <small class="text-muted d-block fw-bold" style="font-size: 11px;">NIM</small>
+                <span class="fw-bold font-monospace" id="live-detail-nim">-</span>
+              </div>
+            </div>
+            <div class="col-md-2">
+              <div class="p-2 bg-light border rounded">
+                <small class="text-muted d-block fw-bold" style="font-size: 11px;">KUIS</small>
+                <span class="badge bg-secondary" id="live-detail-quiz">-</span>
+              </div>
+            </div>
+            <div class="col-md-2">
+              <div class="p-2 bg-light border rounded">
+                <small class="text-muted d-block fw-bold" style="font-size: 11px;">STATUS UJIAN</small>
+                <span id="live-detail-status">-</span>
+              </div>
+            </div>
+            <div class="col-md-3">
+              <div class="p-2 bg-light border rounded">
+                <small class="text-muted d-block fw-bold" style="font-size: 11px;">TOTAL WAKTU / SISA WAKTU</small>
+                <span class="fw-bold font-monospace text-primary" id="live-detail-time">-</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Section 1: Rincian Durasi Pengerjaan Per Soal -->
+          <div class="mb-4">
+            <h6 class="fw-bold text-dark border-bottom pb-2 mb-3">
+              📊 Durasi Pengerjaan Per Nomor Soal
+            </h6>
+            <div id="live-detail-question-breakdown" class="row g-3">
+              <div class="col-12 text-muted small">Memuat rincian waktu tiap soal...</div>
+            </div>
+          </div>
+
+          <!-- Section 2: Timeline Perpindahan Soal & Log Detik demi Detik -->
+          <div>
+            <div class="d-flex justify-content-between align-items-center border-bottom pb-2 mb-2">
+              <h6 class="fw-bold text-dark m-0">
+                📜 Timeline Log Detik & Perpindahan Soal
+              </h6>
+              <small class="text-muted">Mencatat kapan mulai, berapa detik di tiap soal, dan kapan berpindah soal</small>
+            </div>
+            <div class="table-responsive" style="max-height: 320px; overflow-y: auto;">
+              <table class="table table-sm table-bordered table-hover align-middle mb-0">
+                <thead class="table-light sticky-top">
+                  <tr>
+                    <th style="width: 48px; text-align: center;">#</th>
+                    <th style="width: 120px;">Waktu Ujian</th>
+                    <th style="width: 140px;">Jam Riil</th>
+                    <th style="width: 160px;">Jenis Aktivitas</th>
+                    <th>Detail Pengerjaan & Posisi Soal</th>
+                  </tr>
+                </thead>
+                <tbody id="live-detail-timeline-tbody">
+                  <tr>
+                    <td colspan="5" class="text-center text-muted py-3">Memuat timeline aktivitas...</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Tutup</button>
+        </div>
       </div>
     </div>
   </div>
@@ -420,6 +583,7 @@
     const scheduleModal = new bootstrap.Modal(document.getElementById('scheduleModal'));
     const violationDetailModal = new bootstrap.Modal(document.getElementById('violationDetailModal'));
     const usersModal = new bootstrap.Modal(document.getElementById('usersModal'));
+    const liveDetailModal = new bootstrap.Modal(document.getElementById('liveDetailModal'));
 
     // State Aplikasi
     let currentUser = null;
@@ -427,6 +591,11 @@
     let filteredSubmissions = []; // Data setelah difilter & disort
     let currentSortField = 'submitted_at';
     let currentSortDirection = 'desc'; // 'asc' atau 'desc'
+
+    // State Live Monitoring
+    let liveMonitorOpen = false;
+    let liveMonitorInterval = null;
+    let liveSessionsData = [];
 
     function getAuthHeaders() {
       const token = localStorage.getItem('admin_token') || '';
@@ -522,6 +691,7 @@
 
       const descEl = document.getElementById('user-role-desc');
       const manageUsersBtn = document.getElementById('btn-manage-users');
+      const liveMonitorBtn = document.getElementById('btn-live-monitor');
       const scheduleBtn = document.getElementById('btn-open-schedule');
       const soalBtn = document.getElementById('btn-open-soal');
 
@@ -529,21 +699,27 @@
         roleEl.className = 'fw-bold text-danger';
         descEl.textContent = '• Akses Administrator Penuh';
         manageUsersBtn.classList.remove('d-none');
+        liveMonitorBtn.classList.remove('d-none');
         scheduleBtn.classList.remove('d-none');
         soalBtn.classList.remove('d-none');
       } else if (currentUser.role === 'DOSEN') {
         roleEl.className = 'fw-bold text-primary';
         descEl.textContent = '• Akses Penilaian & Pengaturan Ujian';
         manageUsersBtn.classList.add('d-none');
+        liveMonitorBtn.classList.add('d-none');
         scheduleBtn.classList.remove('d-none');
         soalBtn.classList.remove('d-none');
       } else if (currentUser.role === 'PROCTOR') {
         roleEl.className = 'fw-bold text-warning';
-        descEl.textContent = '• Mode Pengawas (Monitoring Pelanggaran)';
+        descEl.textContent = '• Mode Pengawas (Monitoring Pelanggaran & Live)';
         manageUsersBtn.classList.add('d-none');
+        liveMonitorBtn.classList.remove('d-none');
         scheduleBtn.classList.add('d-none');
         soalBtn.classList.add('d-none');
       }
+
+      // Update badge jumlah sesi live yang sedang berlangsung
+      updateLiveBadgeCount();
     }
 
     function showDashboard() {
@@ -560,7 +736,7 @@
     // --- REKAP DATA SUBMISSIONS DARI SERVER ---
     async function loadSubmissions() {
       const tbody = document.getElementById('submission-table');
-      tbody.innerHTML = '<tr><td colspan="8" class="text-center py-4">Memuat data terbaru dari server...</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="9" class="text-center py-4">Memuat data terbaru dari server...</td></tr>';
 
       try {
         const res = await fetch(`${API_BASE}/v1/admin/submissions`, {
@@ -579,11 +755,12 @@
           rawSubmissions = result.data;
           updateQuizFilterOptions();
           applyFiltersAndSort();
+          updateLiveBadgeCount();
         } else {
-          tbody.innerHTML = `<tr><td colspan="8" class="text-center text-danger py-4">Error: ${result.message || 'Gagal memuat data.'}</td></tr>`;
+          tbody.innerHTML = `<tr><td colspan="9" class="text-center text-danger py-4">Error: ${result.message || 'Gagal memuat data.'}</td></tr>`;
         }
       } catch (err) {
-        tbody.innerHTML = `<tr><td colspan="8" class="text-center text-danger py-4">Gagal memuat data: ${err.message}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="9" class="text-center text-danger py-4">Gagal memuat data: ${err.message}</td></tr>`;
       }
     }
 
@@ -735,13 +912,13 @@
       const tbody = document.getElementById('submission-table');
 
       if (filteredSubmissions.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted py-4">Tidak ada data jawaban yang cocok dengan filter.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="9" class="text-center text-muted py-4">Tidak ada data jawaban yang cocok dengan filter.</td></tr>';
         return;
       }
 
       const isProctor = currentUser && currentUser.role === 'PROCTOR';
 
-      tbody.innerHTML = filteredSubmissions.map(sub => {
+      tbody.innerHTML = filteredSubmissions.map((sub, index) => {
         let answersFormatted = '-';
         try {
           const parsed = typeof sub.answers === 'string' ? JSON.parse(sub.answers) : sub.answers;
@@ -796,6 +973,7 @@
 
         return `
           <tr>
+            <td class="text-center text-muted fw-bold font-monospace" style="width: 48px;">${index + 1}</td>
             <td class="fw-bold font-monospace">${sub.nim && sub.nim.trim() !== '' ? escapeHtml(sub.nim) : '<span class="text-muted">-</span>'}</td>
             <td class="fw-semibold">${sub.nama && sub.nama.trim() !== '' ? escapeHtml(sub.nama) : '<span class="text-muted">-</span>'}</td>
             <td><span class="badge bg-secondary">${escapeHtml(sub.quiz_id || '-')}</span></td>
@@ -1165,6 +1343,335 @@
         }
       } catch (err) {
         alert('Terjadi kesalahan koneksi!');
+      }
+    }
+
+    // =============================================================
+    // 4. SISTEM MONITORING REAL-TIME LIVE UJIAN MAHASISWA
+    // =============================================================
+
+    function toggleLiveMonitor() {
+      const panel = document.getElementById('live-monitor-panel');
+      const btn = document.getElementById('btn-live-monitor');
+      liveMonitorOpen = !liveMonitorOpen;
+
+      if (liveMonitorOpen) {
+        panel.classList.add('active');
+        btn.classList.remove('btn-outline-danger');
+        btn.classList.add('btn-danger');
+        btn.innerHTML = '🔴 Tutup Live Monitor';
+        loadLiveSessions();
+        if (liveMonitorInterval) clearInterval(liveMonitorInterval);
+        liveMonitorInterval = setInterval(loadLiveSessions, 5000); // Polling tiap 5 detik
+        panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      } else {
+        panel.classList.remove('active');
+        btn.classList.add('btn-outline-danger');
+        btn.classList.remove('btn-danger');
+        btn.innerHTML = '🔴 Live Monitor <span id="topbar-live-count" class="badge bg-danger ms-1 d-none">0</span>';
+        if (liveMonitorInterval) clearInterval(liveMonitorInterval);
+        updateLiveBadgeCount();
+      }
+    }
+
+    // Format detik ke bentuk "Xm Yd" atau "Xd"
+    function formatDuration(sec) {
+      if (sec === null || sec === undefined || isNaN(sec)) return '-';
+      const s = Math.max(0, Math.round(sec));
+      const hours = Math.floor(s / 3600);
+      const minutes = Math.floor((s % 3600) / 60);
+      const seconds = s % 60;
+
+      if (hours > 0) {
+        return `${hours}j ${minutes}m ${seconds}d`;
+      }
+      if (minutes > 0) {
+        return `${minutes}m ${seconds}d`;
+      }
+      return `${seconds} detik`;
+    }
+
+    // Update jumlah peserta yang sedang aktif di tombol topbar
+    async function updateLiveBadgeCount() {
+      if (!currentUser || (currentUser.role !== 'SUPERADMIN' && currentUser.role !== 'PROCTOR')) return;
+      try {
+        const res = await fetch(`${API_BASE}/v1/admin/live/sessions`, { headers: getAuthHeaders() });
+        if (!res.ok) return;
+        const result = await res.json();
+        const activeCount = (result.data || []).filter(s => s.status === 'ACTIVE').length;
+        const badgeEl = document.getElementById('topbar-live-count');
+        if (badgeEl) {
+          if (activeCount > 0) {
+            badgeEl.textContent = activeCount;
+            badgeEl.classList.remove('d-none');
+          } else {
+            badgeEl.classList.add('d-none');
+          }
+        }
+      } catch (e) {
+        // Abaikan error background polling
+      }
+    }
+
+    // Ambil daftar seluruh sesi live dari server
+    async function loadLiveSessions() {
+      const tbody = document.getElementById('live-sessions-tbody');
+      const activeCountEl = document.getElementById('live-count-active');
+      const finishedCountEl = document.getElementById('live-count-finished');
+      const subtitleEl = document.getElementById('live-monitor-subtitle');
+
+      try {
+        const res = await fetch(`${API_BASE}/v1/admin/live/sessions`, {
+          headers: getAuthHeaders()
+        });
+
+        if (res.status === 401) {
+          if (liveMonitorInterval) clearInterval(liveMonitorInterval);
+          return;
+        }
+
+        const result = await res.json();
+
+        if (res.ok && result.status === 'success' && Array.isArray(result.data)) {
+          liveSessionsData = result.data;
+          
+          const activeSessions = liveSessionsData.filter(s => s.status === 'ACTIVE');
+          const finishedSessions = liveSessionsData.filter(s => s.status !== 'ACTIVE');
+
+          activeCountEl.textContent = activeSessions.length;
+          finishedCountEl.textContent = finishedSessions.length;
+          subtitleEl.textContent = `Memantau pengerjaan mahasiswa secara real-time • Terakhir diperbarui: ${new Date().toLocaleTimeString('id-ID')}`;
+
+          // Update badge di topbar jika monitor tidak sedang terbuka
+          const topbarBadge = document.getElementById('topbar-live-count');
+          if (topbarBadge && activeSessions.length > 0) {
+            topbarBadge.textContent = activeSessions.length;
+            topbarBadge.classList.remove('d-none');
+          }
+
+          if (liveSessionsData.length === 0) {
+            tbody.innerHTML = `
+              <tr>
+                <td colspan="12" class="text-center text-muted py-4">
+                  Belum ada peserta yang aktif mengerjakan ujian saat ini. Begitu mahasiswa menekan "Mulai Ujian", sesi mereka akan otomatis muncul di sini.
+                </td>
+              </tr>
+            `;
+            return;
+          }
+
+          tbody.innerHTML = liveSessionsData.map((session, index) => {
+            const isActive = session.status === 'ACTIVE';
+            const qNum = (session.currentQuestionIndex || 0) + 1;
+            const qText = session.currentQuestionText || `Soal ${qNum}`;
+            const shortQText = qText.length > 45 ? qText.substring(0, 45) + '...' : qText;
+
+            // Status Badge
+            let statusBadge = '<span class="badge bg-success">✅ Selesai</span>';
+            let rowClass = '';
+            if (session.status === 'ACTIVE') {
+              statusBadge = '<span class="badge bg-danger pulse-live">🟢 SEDANG MENGERJAKAN</span>';
+              rowClass = 'table-light';
+            } else if (session.status === 'DISQUALIFIED') {
+              statusBadge = '<span class="badge bg-danger">❌ Diskualifikasi</span>';
+            } else if (session.status === 'TIME_EXPIRED') {
+              statusBadge = '<span class="badge bg-warning text-dark">⏰ Waktu Habis</span>';
+            } else if (session.status === 'SUBMITTED' || session.status === 'SUBMITTED_MANUALLY') {
+              statusBadge = '<span class="badge bg-success">✅ Sudah Submit</span>';
+            }
+
+            // Waktu pada soal saat ini
+            const currentQTiming = session.questionTimings && session.questionTimings[session.currentQuestionIndex || 0];
+            const timeOnCurrentQ = currentQTiming ? formatDuration(currentQTiming.totalSeconds) : (isActive ? 'Sedang aktif...' : '-');
+
+            // Total waktu
+            const totalElapsed = formatDuration(session.totalElapsedSeconds);
+
+            // Sisa Waktu
+            const remaining = session.remainingSeconds !== null && session.remainingSeconds !== undefined
+              ? formatDuration(session.remainingSeconds)
+              : '-';
+
+            // Pelanggaran
+            const vCount = session.violationCount || 0;
+            let vBadge = '<span class="badge bg-success">0</span>';
+            if (vCount >= 3) vBadge = `<span class="badge bg-danger">${vCount} (Batas Max)</span>`;
+            else if (vCount > 0) vBadge = `<span class="badge bg-warning text-dark">${vCount}</span>`;
+
+            // Heartbeat update
+            const secondsAgo = Math.max(0, Math.floor((Date.now() - session.lastHeartbeat) / 1000));
+            const lastUpdateText = secondsAgo < 15 
+              ? `<span class="text-success fw-bold">Baru saja (${secondsAgo}d lalu)</span>`
+              : `<span class="text-muted">${secondsAgo} detik lalu</span>`;
+
+            return `
+              <tr class="${rowClass} live-row" onclick="viewLiveDetailModal('${encodeURIComponent(session.nim)}', '${encodeURIComponent(session.quizId)}')">
+                <td class="text-center text-muted fw-bold font-monospace" style="width: 48px;">${index + 1}</td>
+                <td class="fw-bold">${escapeHtml(session.nama || '-')}</td>
+                <td class="font-monospace small">${escapeHtml(session.nim || '-')}</td>
+                <td><span class="badge bg-secondary">${escapeHtml(session.quizId || '-')}</span></td>
+                <td>${statusBadge}</td>
+                <td>
+                  <span class="badge ${isActive ? 'bg-primary' : 'bg-secondary'} me-1">Soal ${qNum}</span>
+                  <span class="small text-muted" title="${escapeHtml(qText)}">${escapeHtml(shortQText)}</span>
+                </td>
+                <td class="font-monospace fw-bold text-danger">${timeOnCurrentQ}</td>
+                <td class="font-monospace fw-semibold">${totalElapsed}</td>
+                <td class="font-monospace small text-primary">${remaining}</td>
+                <td>${vBadge}</td>
+                <td class="small">${lastUpdateText}</td>
+                <td class="text-center">
+                  <button class="btn btn-xs btn-outline-danger py-0 px-2 fw-semibold" style="font-size: 11px;"
+                          onclick="event.stopPropagation(); viewLiveDetailModal('${encodeURIComponent(session.nim)}', '${encodeURIComponent(session.quizId)}')">
+                    🔍 Detail Log
+                  </button>
+                </td>
+              </tr>
+            `;
+          }).join('');
+        }
+      } catch (err) {
+        tbody.innerHTML = `<tr><td colspan="12" class="text-center text-danger py-4">Gagal memuat sesi live: ${err.message}</td></tr>`;
+      }
+    }
+
+    // Tampilkan Modal Detail Timeline Pengerjaan Mahasiswa
+    async function viewLiveDetailModal(nimEncoded, quizIdEncoded) {
+      const nim = decodeURIComponent(nimEncoded);
+      const quizId = decodeURIComponent(quizIdEncoded);
+
+      // Tampilkan Modal dengan state loading
+      document.getElementById('live-detail-nama').textContent = 'Memuat...';
+      document.getElementById('live-detail-nim').textContent = nim;
+      document.getElementById('live-detail-quiz').textContent = quizId;
+      document.getElementById('live-detail-status').innerHTML = '<span class="text-muted">Memuat...</span>';
+      document.getElementById('live-detail-time').textContent = 'Memuat...';
+      document.getElementById('live-detail-question-breakdown').innerHTML = '<div class="col-12 text-muted small py-2">Memuat rincian waktu...</div>';
+      document.getElementById('live-detail-timeline-tbody').innerHTML = '<tr><td colspan="5" class="text-center py-3 text-muted">Memuat timeline aktivitas...</td></tr>';
+
+      liveDetailModal.show();
+
+      try {
+        const res = await fetch(`${API_BASE}/v1/admin/live/sessions/${encodeURIComponent(nim)}/${encodeURIComponent(quizId)}`, {
+          headers: getAuthHeaders()
+        });
+
+        if (!res.ok) {
+          document.getElementById('live-detail-nama').textContent = 'Data sesi tidak ditemukan.';
+          return;
+        }
+
+        const json = await res.json();
+        const s = json.data;
+
+        // Info Kartu Peserta
+        document.getElementById('live-detail-nama').textContent = s.nama || '-';
+        document.getElementById('live-detail-nim').textContent = s.nim || '-';
+        document.getElementById('live-detail-quiz').textContent = s.quizId || '-';
+
+        let statusHtml = '<span class="badge bg-success">✅ Selesai</span>';
+        if (s.status === 'ACTIVE') {
+          statusHtml = '<span class="badge bg-danger pulse-live">🟢 SEDANG MENGERJAKAN</span>';
+        } else if (s.status === 'DISQUALIFIED') {
+          statusHtml = '<span class="badge bg-danger">❌ Diskualifikasi</span>';
+        } else if (s.status === 'TIME_EXPIRED') {
+          statusHtml = '<span class="badge bg-warning text-dark">⏰ Waktu Habis</span>';
+        }
+        document.getElementById('live-detail-status').innerHTML = statusHtml;
+
+        const totalStr = formatDuration(s.totalElapsedSeconds);
+        const remStr = s.remainingSeconds !== null ? formatDuration(s.remainingSeconds) : '-';
+        document.getElementById('live-detail-time').textContent = `${totalStr} (Sisa: ${remStr})`;
+
+        // Section 1: Breakdown Waktu Tiap Soal
+        const breakdownContainer = document.getElementById('live-detail-question-breakdown');
+        const timings = s.questionTimings || [];
+
+        if (timings.length === 0) {
+          breakdownContainer.innerHTML = '<div class="col-12 text-muted small">Belum ada rekaman waktu soal.</div>';
+        } else {
+          const maxSec = Math.max(...timings.map(t => t.totalSeconds || 0), 1);
+          const currentActiveIdx = s.currentQuestionIndex || 0;
+
+          breakdownContainer.innerHTML = timings.map((item, idx) => {
+            const isCurrentlyOnThis = idx === currentActiveIdx && s.status === 'ACTIVE';
+            const percent = Math.min(100, Math.round(((item.totalSeconds || 0) / maxSec) * 100));
+            const barColor = isCurrentlyOnThis ? 'bg-danger' : 'bg-primary';
+
+            return `
+              <div class="col-md-4">
+                <div class="p-3 border rounded ${isCurrentlyOnThis ? 'border-danger shadow-sm bg-danger-subtle' : 'bg-light'}">
+                  <div class="d-flex justify-content-between align-items-center mb-1">
+                    <span class="badge ${isCurrentlyOnThis ? 'bg-danger pulse-live' : 'bg-primary'} fw-bold">
+                      Soal ${item.qNum} ${isCurrentlyOnThis ? '● Sedang Dikerjakan' : ''}
+                    </span>
+                    <span class="fw-bold font-monospace fs-6 text-dark">
+                      ${formatDuration(item.totalSeconds || 0)}
+                    </span>
+                  </div>
+                  <div class="q-bar-bg my-2">
+                    <div class="q-bar-fill ${barColor}" style="width: ${percent}%;"></div>
+                  </div>
+                  <div class="small text-muted text-truncate" title="${escapeHtml(item.qText || '')}">
+                    ${escapeHtml(item.qText || `Soal nomor ${item.qNum}`)}
+                  </div>
+                  <div class="small text-secondary mt-1">
+                    🔄 Ditinjau / difokuskan: <b>${item.switchCount || 1}x</b>
+                  </div>
+                </div>
+              </div>
+            `;
+          }).join('');
+        }
+
+        // Section 2: Timeline Log Detik demi Detik
+        const timelineTbody = document.getElementById('live-detail-timeline-tbody');
+        const logs = s.activityLog || [];
+
+        if (logs.length === 0) {
+          timelineTbody.innerHTML = '<tr><td colspan="5" class="text-center py-3 text-muted">Belum ada riwayat aktivitas yang tercatat.</td></tr>';
+        } else {
+          const badgeMap = {
+            SESSION_START: '<span class="badge bg-success">Mulai Ujian</span>',
+            QUESTION_FOCUS: '<span class="badge bg-primary">Buka / Fokus Soal</span>',
+            QUESTION_LEAVE: '<span class="badge bg-secondary">Tinggalkan Soal</span>',
+            VIOLATION: '<span class="badge bg-danger">Pelanggaran Terdeteksi</span>',
+            SUBMIT: '<span class="badge bg-dark">Submit Ujian</span>'
+          };
+
+          timelineTbody.innerHTML = logs.map((log, lIdx) => {
+            const badgeType = badgeMap[log.type] || `<span class="badge bg-secondary">${escapeHtml(log.type)}</span>`;
+            const jamRiil = log.timestampISO ? new Date(log.timestampISO).toLocaleTimeString('id-ID') : '-';
+            const elapsed = `Detik ke-${log.elapsedSeconds || 0} (${formatDuration(log.elapsedSeconds || 0)})`;
+
+            let detailMsg = '';
+            if (log.type === 'SESSION_START') {
+              detailMsg = `Mahasiswa resmi memulai ujian untuk kuis <b>${escapeHtml(s.quizId)}</b>.`;
+            } else if (log.type === 'QUESTION_FOCUS') {
+              detailMsg = `Membuka dan mulai mengerjakan <b>Soal ${log.questionNum}</b>: <span class="text-muted">${escapeHtml(log.questionText || '')}</span>`;
+            } else if (log.type === 'QUESTION_LEAVE') {
+              detailMsg = `Selesai sementara di <b>Soal ${log.questionNum}</b>, berpindah fokus ke soal lain.`;
+            } else if (log.type === 'VIOLATION') {
+              detailMsg = `<span class="text-danger fw-bold">Terjadi pelanggaran proctoring saat membuka Soal ${log.questionNum}!</span>`;
+            } else if (log.type === 'SUBMIT') {
+              detailMsg = `Mahasiswa menyelesaikan ujian dan mengirim seluruh berkas jawaban.`;
+            } else {
+              detailMsg = escapeHtml(log.detail || '-');
+            }
+
+            return `
+              <tr>
+                <td class="text-center text-muted font-monospace small">${lIdx + 1}</td>
+                <td class="font-monospace small fw-bold text-primary">${elapsed}</td>
+                <td class="font-monospace small text-muted">${jamRiil}</td>
+                <td>${badgeType}</td>
+                <td class="small">${detailMsg}</td>
+              </tr>
+            `;
+          }).join('');
+        }
+      } catch (err) {
+        document.getElementById('live-detail-nama').textContent = 'Gagal memuat: ' + err.message;
       }
     }
 

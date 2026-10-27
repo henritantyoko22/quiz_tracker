@@ -196,6 +196,18 @@
     let remainingSeconds = 60 * 60; // Default 60 menit
     let quizSettings = null;
 
+    // === LIVE MONITORING STATE ===
+    let sessionStartTime = null;          // Date.now() saat mulai
+    let currentFocusedQuestion = 0;       // Index soal yang sedang dikerjakan (0-based)
+    let questionFocusStart = {};          // { qIndex: Date.now() }
+    let questionAccumSeconds = {};        // { qIndex: totalDetik }
+    let activityLog = [];                 // [{type,questionNum,questionText,elapsedSeconds,timestamp,timestampISO}]
+    let heartbeatInterval = null;
+    let loadedQuestions = [];             // Array soal [{id, question_text}]
+
+    const API_LIVE_SESSION_URL = `${API_BASE}/v1/quiz/live/session`;
+    const API_LIVE_HEARTBEAT_URL = `${API_BASE}/v1/quiz/live/heartbeat`;
+
     // Bank Soal Fallback jika Database kosong atau server offline
     const FALLBACK_QUESTION_BANKS = {
       'ESSAY_WEB_DEV': [
@@ -342,6 +354,7 @@
       document.getElementById('quiz-container').classList.remove('d-none');
       
       isLoggedIn = true;
+      sessionStartTime = Date.now();
 
       // Masuk Layar Penuh (Fullscreen)
       if (document.documentElement.requestFullscreen) {
@@ -353,6 +366,9 @@
 
       // Muat soal secara dinamis dari API backend
       await loadDynamicQuestions(quizId);
+
+      // Daftarkan sesi live ke server (setelah soal dimuat)
+      await registerLiveSession();
     });
 
     // --- LOGIKA TIMER HITUNG MUNDUR (COUNTDOWN TIMER) ---
@@ -454,6 +470,7 @@
       }
 
       renderQuestions(questions);
+      setupQuestionFocusTracking();
 
       loadingEl.classList.add('d-none');
       formEl.classList.remove('d-none');
@@ -461,6 +478,7 @@
 
     // --- RENDER ELEMEN SOAL KE DOM ---
     function renderQuestions(questions) {
+      loadedQuestions = questions; // Simpan untuk live tracking
       const listEl = document.getElementById('questions-list');
       listEl.innerHTML = '';
 
@@ -505,6 +523,161 @@
         .replace(/'/g, '&#039;');
     }
 
+    // === LIVE MONITORING FUNCTIONS ===
+
+    // Hitung detik yang dihabiskan sejak sessionStartTime
+    function elapsedFromStart() {
+      return sessionStartTime ? Math.floor((Date.now() - sessionStartTime) / 1000) : 0;
+    }
+
+    // Simpan ke log aktivitas
+    function addActivityLog(type, qIndex) {
+      const qNum = qIndex + 1;
+      const qText = (loadedQuestions[qIndex] && loadedQuestions[qIndex].question_text) || `Soal ${qNum}`;
+      activityLog.push({
+        type,
+        questionNum: qNum,
+        questionText: qText,
+        elapsedSeconds: elapsedFromStart(),
+        timestamp: Date.now(),
+        timestampISO: new Date().toISOString()
+      });
+      // Batasi log maksimal 500 event agar tidak terlalu besar
+      if (activityLog.length > 500) activityLog.splice(0, activityLog.length - 500);
+    }
+
+    // Ketika fokus berpindah dari soal lama ke soal baru
+    function onQuestionFocusChange(newQIndex) {
+      if (newQIndex === currentFocusedQuestion) return;
+
+      // Akumulasi waktu soal lama
+      const oldQ = currentFocusedQuestion;
+      if (questionFocusStart[oldQ] !== undefined) {
+        const spent = Math.floor((Date.now() - questionFocusStart[oldQ]) / 1000);
+        questionAccumSeconds[oldQ] = (questionAccumSeconds[oldQ] || 0) + spent;
+      }
+
+      // Log perpindahan soal
+      addActivityLog('QUESTION_LEAVE', oldQ);
+      addActivityLog('QUESTION_FOCUS', newQIndex);
+
+      // Update state
+      currentFocusedQuestion = newQIndex;
+      questionFocusStart[newQIndex] = Date.now();
+    }
+
+    // Setup tracking soal yang terlihat dan difokuskan
+    function setupQuestionFocusTracking() {
+      // Init: soal pertama sudah dalam fokus
+      currentFocusedQuestion = 0;
+      questionFocusStart[0] = Date.now();
+      addActivityLog('QUESTION_FOCUS', 0);
+
+      // 1. Observer saat scroll
+      const observer = new IntersectionObserver((entries) => {
+        let maxRatio = 0;
+        let mostVisible = -1;
+        entries.forEach(entry => {
+          if (entry.intersectionRatio > maxRatio) {
+            maxRatio = entry.intersectionRatio;
+            const cards = Array.from(document.querySelectorAll('.question-item'));
+            mostVisible = cards.indexOf(entry.target);
+          }
+        });
+        if (mostVisible >= 0 && mostVisible !== currentFocusedQuestion) {
+          onQuestionFocusChange(mostVisible);
+        }
+      }, { threshold: [0.3, 0.5, 0.7] });
+
+      const cards = document.querySelectorAll('.question-item');
+      cards.forEach((card, index) => {
+        observer.observe(card);
+        // 2. Direct focus listener pada textarea tiap soal
+        const textarea = card.querySelector('textarea');
+        if (textarea) {
+          textarea.addEventListener('focus', () => {
+            onQuestionFocusChange(index);
+          });
+        }
+      });
+    }
+
+    // Bangun data timing per soal untuk dikirim ke server
+    function buildQuestionTimings() {
+      // Tambahkan waktu soal yang sedang aktif saat ini
+      const currentSpentNow = questionFocusStart[currentFocusedQuestion] !== undefined
+        ? Math.floor((Date.now() - questionFocusStart[currentFocusedQuestion]) / 1000)
+        : 0;
+
+      return loadedQuestions.map((q, idx) => ({
+        qNum: idx + 1,
+        qText: q.question_text || `Soal ${idx + 1}`,
+        totalSeconds: (questionAccumSeconds[idx] || 0) + (idx === currentFocusedQuestion ? currentSpentNow : 0),
+        switchCount: activityLog.filter(e => e.type === 'QUESTION_FOCUS' && e.questionNum === idx + 1).length
+      }));
+    }
+
+    // Daftarkan sesi live ke server
+    async function registerLiveSession() {
+      if (!userNim || !quizId) return;
+      addActivityLog('SESSION_START', currentFocusedQuestion);
+      try {
+        await fetch(API_LIVE_SESSION_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userId: userNama,
+            nim: userNim,
+            quizId: quizId,
+            totalQuestions: loadedQuestions.length,
+            questionTexts: loadedQuestions.map(q => q.question_text || '')
+          })
+        });
+        // Mulai heartbeat setelah sesi terdaftar
+        startHeartbeat();
+      } catch (err) {
+        console.warn('Gagal daftarkan sesi live:', err);
+        startHeartbeat(); // Tetap mulai heartbeat
+      }
+    }
+
+    // Kirim heartbeat ke server
+    async function sendHeartbeat(finalStatus = null) {
+      if (!userNim || !quizId) return;
+      try {
+        const qText = (loadedQuestions[currentFocusedQuestion] && loadedQuestions[currentFocusedQuestion].question_text) || `Soal ${currentFocusedQuestion + 1}`;
+        await fetch(API_LIVE_HEARTBEAT_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            nim: userNim,
+            quizId: quizId,
+            currentQuestionIndex: currentFocusedQuestion,
+            currentQuestionText: qText,
+            questionTimings: buildQuestionTimings(),
+            activityLog: activityLog,
+            remainingSeconds: remainingSeconds,
+            violationCount: violationCount,
+            status: finalStatus || 'ACTIVE'
+          })
+        });
+      } catch (err) {
+        console.warn('Gagal kirim heartbeat:', err);
+      }
+    }
+
+    // Mulai interval heartbeat tiap 10 detik
+    function startHeartbeat() {
+      if (heartbeatInterval) clearInterval(heartbeatInterval);
+      heartbeatInterval = setInterval(() => {
+        if (isSubmitted) {
+          clearInterval(heartbeatInterval);
+          return;
+        }
+        sendHeartbeat();
+      }, 10000);
+    }
+
     // --- NOTIFIKASI PELANGGARAN TANPA WINDOW.ALERT (MENCEGAH BLUR LOOP) ---
     function showViolationToast(title, message) {
       const container = document.getElementById('violation-toast-container');
@@ -530,6 +703,7 @@
 
       violationCount++;
       document.getElementById('violation-badge').textContent = `Pelanggaran: ${violationCount} / ${MAX_VIOLATIONS}`;
+      addActivityLog('VIOLATION', currentFocusedQuestion);
       
       showViolationToast(`PELANGGARAN TERDETEKSI (${violationCount}/${MAX_VIOLATIONS})`, detail);
 
@@ -558,6 +732,9 @@
       if (!isLoggedIn || isSubmitted) return;
       isSubmitted = true;
       if (timerInterval) clearInterval(timerInterval);
+      if (heartbeatInterval) clearInterval(heartbeatInterval);
+      addActivityLog('SUBMIT', currentFocusedQuestion);
+      sendHeartbeat(reason);
       disableForm();
 
       if (reason === 'DISQUALIFIED') {
@@ -686,7 +863,7 @@
       }
     });
 
-    essayForm.addEventListener('submit', (e) => {
+    essayForm.addEventListener('submit', async (e) => {
       e.preventDefault();
       if (!isLoggedIn || isSubmitted) return;
       
@@ -695,6 +872,9 @@
 
       isSubmitted = true;
       if (timerInterval) clearInterval(timerInterval);
+      if (heartbeatInterval) clearInterval(heartbeatInterval);
+      addActivityLog('SUBMIT', currentFocusedQuestion);
+      await sendHeartbeat('SUBMITTED');
       disableForm();
       submitData('SUBMITTED_MANUALLY');
     });

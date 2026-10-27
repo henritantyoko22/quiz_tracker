@@ -77,6 +77,26 @@ const memoryQuizSettings = {
 // Sesi Login Aktif (Token -> User Data)
 const activeSessions = new Map();
 
+// ---------------------------------------------------------------
+// LIVE STUDENT SESSIONS STORE (IN-MEMORY, AUTO-CLEANUP 24H)
+// ---------------------------------------------------------------
+// Key: `${nim}_${quizId}`, Value: liveData object
+const liveStudentSessions = new Map();
+
+function getLiveSessionKey(nim, quizId) {
+  return `${(nim || '').trim()}_${(quizId || '').trim()}`;
+}
+
+// Auto-cleanup sesi lama setiap jam (hapus yang > 24 jam tidak aktif)
+setInterval(() => {
+  const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+  for (const [key, session] of liveStudentSessions.entries()) {
+    if (session.lastHeartbeat < cutoff) {
+      liveStudentSessions.delete(key);
+    }
+  }
+}, 60 * 60 * 1000);
+
 // Middleware Autentikasi & Verifikasi Token
 function authenticate(req, res, next) {
   const authHeader = req.headers['authorization'] || req.headers['x-admin-token'];
@@ -344,6 +364,17 @@ app.post('/v1/quiz/submit', async (req, res) => {
       );
     }
 
+    // Update live session status ke SUBMITTED atau DISQUALIFIED
+    const liveKey = getLiveSessionKey(nim, quizId);
+    const liveSession = liveStudentSessions.get(liveKey);
+    if (liveSession) {
+      liveSession.status = status === 'DISQUALIFIED' ? 'DISQUALIFIED' : (status === 'TIME_EXPIRED' ? 'TIME_EXPIRED' : 'SUBMITTED');
+      liveSession.finishedAt = Date.now();
+      liveSession.finishedAtISO = new Date().toISOString();
+      liveSession.lastHeartbeat = Date.now();
+      liveStudentSessions.set(liveKey, liveSession);
+    }
+
     res.json({ status: 'success', data: result.rows[0] });
   } catch (err) {
     res.status(500).json({ status: 'error', message: err.message });
@@ -363,6 +394,136 @@ app.post('/v1/violations', async (req, res) => {
   } catch (err) {
     res.status(500).json({ status: 'error', message: err.message });
   }
+});
+
+// -------------------------------------------------------------
+// 1b. ENDPOINT LIVE MONITORING SESI PESERTA
+// -------------------------------------------------------------
+
+// Daftarkan sesi live peserta saat mulai mengerjakan (public, tidak perlu auth)
+app.post('/v1/quiz/live/session', (req, res) => {
+  const { userId, nim, quizId, totalQuestions, questionTexts } = req.body;
+  if (!nim || !quizId) {
+    return res.status(400).json({ status: 'error', message: 'nim dan quizId wajib diisi.' });
+  }
+
+  const key = getLiveSessionKey(nim, quizId);
+  const now = Date.now();
+
+  liveStudentSessions.set(key, {
+    key,
+    nama: userId || nim,
+    nim: nim.trim(),
+    quizId: quizId.trim(),
+    totalQuestions: totalQuestions || 0,
+    questionTexts: questionTexts || [],
+    startedAt: now,
+    startedAtISO: new Date(now).toISOString(),
+    currentQuestionIndex: 0,
+    currentQuestionText: (questionTexts && questionTexts[0]) || 'Soal 1',
+    questionTimings: [],       // [{ qNum, qText, totalSeconds, switchCount }]
+    activityLog: [],           // [{ type, questionNum, questionText, elapsedSeconds, timestamp, timestampISO }]
+    status: 'ACTIVE',
+    lastHeartbeat: now,
+    lastHeartbeatISO: new Date(now).toISOString(),
+    violationCount: 0,
+    remainingSeconds: null
+  });
+
+  console.log(`🟢 Sesi live dimulai: ${nim} | Kuis: ${quizId}`);
+  res.json({ status: 'success', message: 'Sesi live terdaftar.', key });
+});
+
+// Update heartbeat / data real-time dari peserta
+app.post('/v1/quiz/live/heartbeat', (req, res) => {
+  const {
+    nim, quizId,
+    currentQuestionIndex, currentQuestionText,
+    questionTimings, activityLog,
+    remainingSeconds, violationCount,
+    status
+  } = req.body;
+
+  if (!nim || !quizId) {
+    return res.status(400).json({ status: 'error', message: 'nim dan quizId wajib diisi.' });
+  }
+
+  const key = getLiveSessionKey(nim, quizId);
+  const now = Date.now();
+  const existing = liveStudentSessions.get(key);
+
+  if (!existing) {
+    return res.status(404).json({ status: 'error', message: 'Sesi tidak ditemukan. Daftarkan sesi terlebih dahulu.' });
+  }
+
+  // Update data sesi dengan data terbaru dari client
+  existing.currentQuestionIndex = currentQuestionIndex !== undefined ? currentQuestionIndex : existing.currentQuestionIndex;
+  existing.currentQuestionText = currentQuestionText || existing.currentQuestionText;
+  existing.questionTimings = questionTimings || existing.questionTimings;
+  existing.activityLog = activityLog || existing.activityLog;
+  existing.remainingSeconds = remainingSeconds !== undefined ? remainingSeconds : existing.remainingSeconds;
+  existing.violationCount = violationCount !== undefined ? violationCount : existing.violationCount;
+  existing.lastHeartbeat = now;
+  existing.lastHeartbeatISO = new Date(now).toISOString();
+
+  // Update status (ACTIVE, SUBMITTED, DISQUALIFIED, TIME_EXPIRED)
+  if (status && status !== 'ACTIVE') {
+    existing.status = status;
+    existing.finishedAt = now;
+    existing.finishedAtISO = new Date(now).toISOString();
+  }
+
+  liveStudentSessions.set(key, existing);
+  res.json({ status: 'success' });
+});
+
+// Ambil semua sesi live (SUPERADMIN & PROCTOR)
+app.get('/v1/admin/live/sessions', authenticate, requireRole('SUPERADMIN', 'PROCTOR'), (req, res) => {
+  const cutoff = Date.now() - 2 * 60 * 60 * 1000; // Tampilkan sesi hingga 2 jam lalu
+  const sessions = [];
+
+  for (const [, session] of liveStudentSessions.entries()) {
+    if (session.lastHeartbeat >= cutoff || session.status === 'ACTIVE') {
+      // Hitung total waktu pengerjaan (detik dari startedAt)
+      const totalElapsed = Math.floor((Date.now() - session.startedAt) / 1000);
+      sessions.push({ ...session, totalElapsedSeconds: totalElapsed });
+    }
+  }
+
+  // Urutkan: ACTIVE duluan, lalu berdasarkan startedAt terbaru
+  sessions.sort((a, b) => {
+    if (a.status === 'ACTIVE' && b.status !== 'ACTIVE') return -1;
+    if (a.status !== 'ACTIVE' && b.status === 'ACTIVE') return 1;
+    return b.startedAt - a.startedAt;
+  });
+
+  res.json({ status: 'success', data: sessions, total: sessions.length });
+});
+
+// Ambil detail satu sesi live mahasiswa
+app.get('/v1/admin/live/sessions/:nim/:quizId', authenticate, requireRole('SUPERADMIN', 'PROCTOR'), (req, res) => {
+  const key = getLiveSessionKey(req.params.nim, req.params.quizId);
+  const session = liveStudentSessions.get(key);
+
+  if (!session) {
+    return res.status(404).json({ status: 'error', message: 'Sesi tidak ditemukan atau sudah kedaluwarsa.' });
+  }
+
+  const totalElapsed = Math.floor((Date.now() - session.startedAt) / 1000);
+  res.json({ status: 'success', data: { ...session, totalElapsedSeconds: totalElapsed } });
+});
+
+// Bersihkan sesi lama secara manual (SUPERADMIN)
+app.delete('/v1/admin/live/sessions/cleanup', authenticate, requireRole('SUPERADMIN'), (req, res) => {
+  const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+  let removed = 0;
+  for (const [key, session] of liveStudentSessions.entries()) {
+    if (session.lastHeartbeat < cutoff) {
+      liveStudentSessions.delete(key);
+      removed++;
+    }
+  }
+  res.json({ status: 'success', message: `${removed} sesi kedaluwarsa berhasil dibersihkan.`, remaining: liveStudentSessions.size });
 });
 
 // -------------------------------------------------------------
