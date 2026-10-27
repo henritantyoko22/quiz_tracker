@@ -207,6 +207,7 @@ app.get('/v1/quiz/list', async (req, res) => {
 });
 
 // Mengambil pengaturan jadwal, jam buka-tutup, dan durasi timer kuis dari DATABASE
+// Jika soal kosong di database, kuis dinyatakan TIDAK VALID
 app.get('/v1/quiz/settings/:quizId', async (req, res) => {
   const { quizId } = req.params;
   const cleanQuizId = (quizId || '').trim();
@@ -216,103 +217,67 @@ app.get('/v1/quiz/settings/:quizId', async (req, res) => {
   }
 
   try {
-    let dbSetting = null;
-    let totalQuestions = 0;
+    // 1. Cek jumlah soal di tabel quiz_questions database
+    const qResult = await db.query(
+      `SELECT COUNT(*) AS total FROM quiz_questions WHERE quiz_id = $1`,
+      [cleanQuizId]
+    );
+    const totalQuestions = parseInt(qResult.rows[0]?.total || 0);
 
-    // 1. Cek tabel quiz_settings dan quiz_questions di database
-    try {
-      const settingResult = await db.query(
-        `SELECT quiz_id, start_time, end_time, duration_minutes, max_violations, is_active 
-         FROM quiz_settings 
-         WHERE quiz_id = $1`,
-        [cleanQuizId]
-      );
-      if (settingResult.rows.length > 0) {
-        dbSetting = settingResult.rows[0];
-      }
-
-      // Cek jumlah soal riil di database
-      const qResult = await db.query(
-        `SELECT COUNT(*) AS total FROM quiz_questions WHERE quiz_id = $1`,
-        [cleanQuizId]
-      );
-      totalQuestions = parseInt(qResult.rows[0]?.total || 0);
-    } catch (dbErr) {
-      console.warn('DB query error on quiz settings:', dbErr.message);
-    }
-
-    // Jika DB offline atau belum ada soal di DB, periksa memory bank soal resmi
-    if (totalQuestions === 0 && memoryQuizQuestions[cleanQuizId]) {
-      totalQuestions = memoryQuizQuestions[cleanQuizId].length;
-    }
-
-    // JIKA TIDAK DITEMUKAN DI MANAPUN (tidak ada setting dan tidak ada soal sama sekali)
-    if (!dbSetting && totalQuestions === 0 && !memoryQuizSettings[cleanQuizId]) {
+    // JIKA TIDAK ADA SOAL DI DATABASE (KOSONG / 0 BUTIR) -> ID KUIS TIDAK VALID!
+    if (totalQuestions === 0) {
       return res.status(404).json({
         status: 'error',
         exists: false,
         has_questions: false,
         total_questions: 0,
-        message: `ID Kuis "${cleanQuizId}" tidak ditemukan di database. Pastikan nomor kuis benar.`
+        message: `ID Kuis "${cleanQuizId}" tidak valid atau belum memiliki butir soal di database.`
       });
     }
 
-    // JIKA KUIS ADA TAPI TIDAK MEMILIKI BUTIR SOAL DI DATABASE (KOSONG)
-    if (totalQuestions === 0) {
-      return res.status(400).json({
-        status: 'error',
-        exists: true,
-        has_questions: false,
-        total_questions: 0,
-        message: `Kuis #${cleanQuizId} terdaftar, tetapi belum memiliki butir soal di database. Ujian tidak dapat dimulai karena soal kosong.`
-      });
-    }
+    // 2. Kuis valid: Ambil pengaturan jadwal & durasi dari tabel quiz_settings
+    const settingResult = await db.query(
+      `SELECT quiz_id, start_time, end_time, duration_minutes, max_violations, is_active 
+       FROM quiz_settings 
+       WHERE quiz_id = $1`,
+      [cleanQuizId]
+    );
 
-    // Ambil data setting kuis
-    const settingData = dbSetting || memoryQuizSettings[cleanQuizId] || {
-      quiz_id: cleanQuizId,
-      start_time: null,
-      end_time: null,
-      duration_minutes: 60,
-      max_violations: 3,
-      is_active: true
-    };
+    let durationMinutes = 60;
+    let maxViolations = 3;
+    let isActive = true;
+    let startTime = null;
+    let endTime = null;
+
+    if (settingResult.rows.length > 0) {
+      const row = settingResult.rows[0];
+      durationMinutes = parseInt(row.duration_minutes) || 60;
+      maxViolations = parseInt(row.max_violations) || 3;
+      isActive = row.is_active !== false;
+      startTime = row.start_time;
+      endTime = row.end_time;
+    }
 
     return res.json({
       status: 'success',
       exists: true,
       has_questions: true,
       data: {
-        quiz_id: settingData.quiz_id,
-        start_time: settingData.start_time,
-        end_time: settingData.end_time,
-        duration_minutes: parseInt(settingData.duration_minutes), // Durasi asli dari DB
-        max_violations: parseInt(settingData.max_violations) || 3,
-        is_active: settingData.is_active !== false,
+        quiz_id: cleanQuizId,
+        start_time: startTime,
+        end_time: endTime,
+        duration_minutes: durationMinutes,
+        max_violations: maxViolations,
+        is_active: isActive,
         total_questions: totalQuestions
       }
     });
 
   } catch (err) {
-    if (memoryQuizSettings[cleanQuizId] && memoryQuizQuestions[cleanQuizId]) {
-      const mem = memoryQuizSettings[cleanQuizId];
-      return res.json({
-        status: 'success',
-        exists: true,
-        has_questions: true,
-        data: {
-          ...mem,
-          total_questions: memoryQuizQuestions[cleanQuizId].length
-        }
-      });
-    }
-
-    return res.status(404).json({
+    return res.status(500).json({
       status: 'error',
       exists: false,
-      has_questions: false,
-      total_questions: 0,
-      message: `ID Kuis "${cleanQuizId}" tidak ditemukan di database.`
+      message: 'Gagal memeriksa kuis di database: ' + err.message
     });
   }
 });
@@ -331,18 +296,8 @@ app.post('/v1/admin/quiz/settings', authenticate, requireRole('SUPERADMIN', 'DOS
   const start = startTime ? new Date(startTime).toISOString() : null;
   const end = endTime ? new Date(endTime).toISOString() : null;
 
-  // Update memori cache server
-  memoryQuizSettings[quizId] = {
-    quiz_id: quizId,
-    start_time: start,
-    end_time: end,
-    duration_minutes: duration,
-    max_violations: maxV,
-    is_active: active
-  };
-
   try {
-    await db.query(
+    const result = await db.query(
       `INSERT INTO quiz_settings (quiz_id, start_time, end_time, duration_minutes, max_violations, is_active, updated_at)
        VALUES ($1, $2, $3, $4, $5, $6, NOW())
        ON CONFLICT (quiz_id) 
@@ -352,20 +307,17 @@ app.post('/v1/admin/quiz/settings', authenticate, requireRole('SUPERADMIN', 'DOS
          duration_minutes = EXCLUDED.duration_minutes,
          max_violations = EXCLUDED.max_violations,
          is_active = EXCLUDED.is_active,
-         updated_at = NOW()`,
-      [quizId, start, end, duration, maxV, active]
+         updated_at = NOW()
+       RETURNING *`,
+      [quizId.trim(), start, end, duration, maxV, active]
     );
     res.json({
       status: 'success',
-      message: `Jadwal & timer kuis ${quizId} berhasil disimpan!`,
-      data: memoryQuizSettings[quizId]
+      message: `Jadwal & timer kuis ${quizId} berhasil disimpan ke database!`,
+      data: result.rows[0]
     });
   } catch (err) {
-    res.json({
-      status: 'success',
-      message: `Jadwal & timer tersimpan di memori server. (Peringatan DB: ${err.message})`,
-      data: memoryQuizSettings[quizId]
-    });
+    res.status(500).json({ status: 'error', message: err.message });
   }
 });
 
@@ -383,26 +335,17 @@ app.get('/v1/quiz/questions/:quizId', async (req, res) => {
       [cleanQuizId]
     );
 
-    if (result.rows.length > 0) {
-      return res.json({ status: 'success', quizId: cleanQuizId, data: result.rows });
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        status: 'error',
+        quizId: cleanQuizId,
+        data: [],
+        message: `ID Kuis "${cleanQuizId}" tidak valid atau belum memiliki butir soal di database.`
+      });
     }
 
-    // Jika DB kosong/offline, periksa memory bank soal resmi
-    if (memoryQuizQuestions[cleanQuizId]) {
-      return res.json({ status: 'success', quizId: cleanQuizId, data: memoryQuizQuestions[cleanQuizId] });
-    }
-
-    // Jika tidak ada soal sama sekali: kembalikan error
-    return res.status(404).json({
-      status: 'error',
-      quizId: cleanQuizId,
-      data: [],
-      message: `Tidak ada butir soal yang ditemukan untuk Kuis #${cleanQuizId}.`
-    });
+    res.json({ status: 'success', quizId: cleanQuizId, data: result.rows });
   } catch (err) {
-    if (memoryQuizQuestions[cleanQuizId]) {
-      return res.json({ status: 'success', quizId: cleanQuizId, data: memoryQuizQuestions[cleanQuizId] });
-    }
     res.status(500).json({ status: 'error', message: err.message });
   }
 });
