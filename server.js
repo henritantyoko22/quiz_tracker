@@ -29,8 +29,39 @@ function verifyPassword(password, storedHash, salt) {
 // TIDAK ada akun default hardcode — semua akun dikelola via database
 let memoryUsers = [];
 
-// Sesi Login Aktif (Token -> User Data)
+// Sesi Login Aktif Cache (Token -> User Data)
 const activeSessions = new Map();
+
+// Helper Token HMAC Kriptografis (Stateless agar kebal restart/serverless cold-start)
+const JWT_SECRET = process.env.JWT_SECRET || process.env.APP_SECRET || 'quiz_tracker_secret_token_signature_key_2026_super_safe';
+
+function generateAdminToken(payload) {
+  const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
+  // Token berlaku 7 hari
+  const exp = Math.floor(Date.now() / 1000) + (7 * 24 * 60 * 60);
+  const data = { ...payload, exp };
+  const body = Buffer.from(JSON.stringify(data)).toString('base64url');
+  const signature = crypto.createHmac('sha256', JWT_SECRET).update(`${header}.${body}`).digest('base64url');
+  return `${header}.${body}.${signature}`;
+}
+
+function verifyAdminToken(token) {
+  try {
+    if (!token || typeof token !== 'string') return null;
+    const parts = token.split('.');
+    if (parts.length !== 3) return null;
+    const [header, body, signature] = parts;
+    const expectedSig = crypto.createHmac('sha256', JWT_SECRET).update(`${header}.${body}`).digest('base64url');
+    if (signature !== expectedSig) return null;
+    const payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
+    if (payload.exp && Math.floor(Date.now() / 1000) > payload.exp) {
+      return null; // Expired
+    }
+    return payload;
+  } catch (e) {
+    return null;
+  }
+}
 
 // ---------------------------------------------------------------
 // LIVE STUDENT SESSIONS STORE (IN-MEMORY, AUTO-CLEANUP 24H)
@@ -72,7 +103,24 @@ function authenticate(req, res, next) {
     return next();
   }
 
-  const session = activeSessions.get(token);
+  // 1. Cek dari memory cache
+  let session = activeSessions.get(token);
+
+  // 2. Jika tidak ada di memory (akibat serverless restart / cold-start), pulihkan via verifikasi kriptografis!
+  if (!session) {
+    const verified = verifyAdminToken(token);
+    if (verified) {
+      session = {
+        userId: verified.userId || 1,
+        username: verified.username,
+        fullName: verified.fullName || verified.full_name || verified.username,
+        role: verified.role || 'DOSEN'
+      };
+      // Simpan kembali ke memory cache instance ini
+      activeSessions.set(token, session);
+    }
+  }
+
   if (!session) {
     return res.status(401).json({ status: 'error', message: 'Sesi login telah berakhir atau tidak valid. Silakan login kembali.' });
   }
@@ -344,14 +392,31 @@ app.post('/v1/quiz/submit', async (req, res) => {
 
     // Update live session status ke SUBMITTED atau DISQUALIFIED
     const liveKey = getLiveSessionKey(nim, quizId);
-    const liveSession = liveStudentSessions.get(liveKey);
-    if (liveSession) {
-      liveSession.status = status === 'DISQUALIFIED' ? 'DISQUALIFIED' : (status === 'TIME_EXPIRED' ? 'TIME_EXPIRED' : 'SUBMITTED');
-      liveSession.finishedAt = Date.now();
-      liveSession.finishedAtISO = new Date().toISOString();
-      liveSession.lastHeartbeat = Date.now();
-      liveStudentSessions.set(liveKey, liveSession);
+    let liveSession = liveStudentSessions.get(liveKey);
+    const finalLiveStatus = status === 'DISQUALIFIED' ? 'DISQUALIFIED' : (status === 'TIME_EXPIRED' ? 'TIME_EXPIRED' : 'SUBMITTED');
+    const nowTs = Date.now();
+    if (!liveSession) {
+      liveSession = {
+        key: liveKey,
+        nama: userId || nim,
+        nim: nim.trim(),
+        quizId: quizId.trim(),
+        startedAt: nowTs - 60000,
+        startedAtISO: new Date(nowTs - 60000).toISOString(),
+        currentQuestionIndex: 0,
+        currentQuestionText: 'Selesai',
+        questionTimings: [],
+        activityLog: [],
+        violationCount: vCount,
+        remainingSeconds: 0
+      };
     }
+    liveSession.status = finalLiveStatus;
+    liveSession.finishedAt = nowTs;
+    liveSession.finishedAtISO = new Date(nowTs).toISOString();
+    liveSession.lastHeartbeat = nowTs;
+    liveSession.remainingSeconds = 0;
+    liveStudentSessions.set(liveKey, liveSession);
 
     res.json({ status: 'success', data: result.rows[0] });
   } catch (err) {
@@ -471,7 +536,11 @@ app.post('/v1/quiz/live/heartbeat', (req, res) => {
     existing.finishedAt = now;
     existing.finishedAtISO = new Date(now).toISOString();
   } else {
-    existing.status = 'ACTIVE';
+    // PENTING: Jika status existing sudah selesai, jangan izinkan heartbeat revert ke ACTIVE!
+    const isAlreadyFinished = ['SUBMITTED', 'SUBMITTED_MANUALLY', 'DISQUALIFIED', 'TIME_EXPIRED'].includes(existing.status);
+    if (!isAlreadyFinished) {
+      existing.status = 'ACTIVE';
+    }
   }
 
   liveStudentSessions.set(key, existing);
@@ -480,21 +549,70 @@ app.post('/v1/quiz/live/heartbeat', (req, res) => {
 
 // Ambil semua sesi live (SUPERADMIN & PROCTOR)
 // Secara default hanya mengembalikan yang statusnya 'ACTIVE' (sedang mengerjakan)
-app.get('/v1/admin/live/sessions', authenticate, requireRole('SUPERADMIN', 'PROCTOR'), (req, res) => {
+app.get('/v1/admin/live/sessions', authenticate, requireRole('SUPERADMIN', 'PROCTOR'), async (req, res) => {
   const showAll = req.query.all === 'true'; // opsional jika ingin melihat riwayat yang baru selesai
   const cutoff = Date.now() - 2 * 60 * 60 * 1000;
   const sessions = [];
 
+  // 1. Cek dari database apakah ada mahasiswa yang sudah resmi submit
+  const dbSubmittedMap = new Map();
+  try {
+    const subResult = await db.query('SELECT nim, quiz_id, status FROM quiz_submissions');
+    for (const row of subResult.rows) {
+      dbSubmittedMap.set(getLiveSessionKey(row.nim, row.quiz_id), row.status || 'SUBMITTED');
+    }
+  } catch (dbErr) {
+    // Abaikan jika DB offline
+  }
+
+  // 2. Ambil quiz_settings untuk mengecek batas waktu maksimal (duration_minutes & end_time)
+  const quizSettingsMap = new Map();
+  try {
+    const setRes = await db.query('SELECT quiz_id, duration_minutes, end_time FROM quiz_settings');
+    for (const r of setRes.rows) {
+      quizSettingsMap.set(String(r.quiz_id).trim(), {
+        durationMinutes: parseInt(r.duration_minutes) || 60,
+        endTime: r.end_time ? new Date(r.end_time).getTime() : null
+      });
+    }
+  } catch (e) {}
+
   for (const [, session] of liveStudentSessions.entries()) {
-    // Jika tidak minta all, HANYA masukkan yang masih ACTIVE
+    const key = session.key || getLiveSessionKey(session.nim, session.quizId);
+
+    // Jika di database sudah ada record submit, paksa status sesi live jadi SUBMITTED!
+    if (dbSubmittedMap.has(key)) {
+      session.status = dbSubmittedMap.get(key);
+      if (!session.finishedAt) {
+        session.finishedAt = Date.now();
+        session.finishedAtISO = new Date().toISOString();
+      }
+      session.remainingSeconds = 0;
+    }
+
+    const totalElapsed = Math.floor((Date.now() - session.startedAt) / 1000);
+
+    // Cek batas waktu durasi kuis:
+    // Jika waktu pengerjaan sudah melebihi durasi kuis (misal 15 menit + 30 detik toleransi) atau melewati end_time,
+    // dan status masih ACTIVE, maka waktu pengerjaan otomatis HABIS (TIME_EXPIRED)!
+    const setting = quizSettingsMap.get(String(session.quizId).trim());
+    const maxSeconds = setting ? setting.durationMinutes * 60 : 3600;
+    const isEndTimePassed = setting && setting.endTime && (Date.now() > setting.endTime);
+
+    if (session.status === 'ACTIVE' && (totalElapsed >= (maxSeconds + 30) || isEndTimePassed)) {
+      session.status = 'TIME_EXPIRED';
+      session.finishedAt = Date.now();
+      session.finishedAtISO = new Date().toISOString();
+      session.remainingSeconds = 0;
+    }
+
+    // Jika tidak minta all, HANYA masukkan yang benar-benar masih ACTIVE
     if (!showAll) {
       if (session.status === 'ACTIVE') {
-        const totalElapsed = Math.floor((Date.now() - session.startedAt) / 1000);
         sessions.push({ ...session, totalElapsedSeconds: totalElapsed });
       }
     } else {
       if (session.lastHeartbeat >= cutoff || session.status === 'ACTIVE') {
-        const totalElapsed = Math.floor((Date.now() - session.startedAt) / 1000);
         sessions.push({ ...session, totalElapsedSeconds: totalElapsed });
       }
     }
@@ -576,16 +694,15 @@ app.post('/v1/admin/login', async (req, res) => {
       return res.status(401).json({ status: 'error', message: 'Username atau password salah!' });
     }
 
-    // Buat session token acak & aman
-    const token = crypto.randomBytes(32).toString('hex');
+    // Buat session token kriptografis stateless (bertahan meski serverless restart)
     const sessionData = {
       userId: user.id || 1,
       username: user.username,
       fullName: user.full_name,
-      role: user.role || 'DOSEN',
-      loginAt: new Date()
+      role: user.role || 'DOSEN'
     };
-    activeSessions.set(token, sessionData);
+    const token = generateAdminToken(sessionData);
+    activeSessions.set(token, { ...sessionData, loginAt: new Date() });
 
     res.json({
       status: 'success',

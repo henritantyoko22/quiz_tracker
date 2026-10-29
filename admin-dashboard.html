@@ -730,9 +730,18 @@
         });
 
         if (res.status === 401) {
-          alert('Sesi login telah berakhir. Silakan login kembali.');
-          logoutAdmin();
-          return;
+          // Cek verifikasi ke /v1/admin/me sekali lagi sebelum logout (mencegah false-alarm)
+          try {
+            const meRes = await fetch(`${API_BASE}/v1/admin/me`, { headers: getAuthHeaders() });
+            if (meRes.status === 401) {
+              alert('Sesi login telah berakhir. Silakan login kembali.');
+              logoutAdmin();
+              return;
+            }
+          } catch (e) {
+            tbody.innerHTML = '<tr><td colspan="9" class="text-center text-warning py-4">⚠️ Koneksi ke server terganggu sejenak. Silakan klik Refresh.</td></tr>';
+            return;
+          }
         }
 
         const result = await res.json();

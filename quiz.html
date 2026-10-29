@@ -203,6 +203,44 @@
       from { opacity: 1; transform: scale(1); }
       to { opacity: 0.7; transform: scale(1.05); }
     }
+
+    /* Floating Sticky Header Pengawas & Timer (Bisa dilihat saat scroll ke bawah) */
+    .sticky-exam-header {
+      position: sticky;
+      top: 12px;
+      z-index: 1030;
+      background: rgba(255, 255, 255, 0.96);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      border-radius: 16px;
+      padding: 12px 20px;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.2), 0 0 0 1px rgba(99, 102, 241, 0.2);
+      border: 1.5px solid rgba(226, 232, 240, 0.9);
+      margin-bottom: 24px;
+      transition: all 0.2s ease;
+    }
+    .floating-timer-box {
+      background: linear-gradient(135deg, #f8fafc 0%, #eef2ff 100%);
+      border: 1.5px solid #c7d2fe;
+      border-radius: 12px;
+      padding: 6px 16px;
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+    }
+    .timer-digits {
+      font-size: 1.45rem;
+      font-weight: 800;
+      letter-spacing: 1px;
+    }
+    .autosave-pill {
+      font-size: 11px;
+      font-weight: 600;
+      padding: 3px 8px;
+      border-radius: 12px;
+      transition: all 0.2s ease;
+    }
   </style>
 </head>
 <body>
@@ -281,33 +319,45 @@
 
   <!-- Area Ujian -->
   <div class="container d-none" id="quiz-container">
-    <div class="card card-custom p-4">
-      <!-- Header Ujian & Timer Waktu -->
-      <div class="d-flex justify-content-between align-items-center border-bottom pb-3 mb-3 flex-wrap gap-2">
-        <div>
-          <h5 class="fw-bold m-0" id="display-user">Mahasiswa: -</h5>
-          <div class="d-flex align-items-center gap-2 mt-1">
-            <small class="text-muted" id="display-nim">NIM: -</small>
-            <span class="badge bg-secondary" id="display-quiz-id">Kuis: -</span>
+    
+    <!-- FLOATING & STICKY TIMER & MONITORING BAR (Problem 5: Melayang saat scroll ke bawah) -->
+    <div class="sticky-exam-header shadow-sm" style="max-width: 900px; margin-left: auto; margin-right: auto;">
+      <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+        <div class="d-flex align-items-center gap-2">
+          <div class="bg-primary text-white rounded-circle d-flex align-items-center justify-content-center shadow-sm" style="width: 38px; height: 38px; font-size: 18px;">
+            🎓
+          </div>
+          <div>
+            <div class="fw-bold text-dark lh-sm" id="display-user">Mahasiswa: -</div>
+            <div class="d-flex align-items-center gap-2 small text-muted mt-1">
+              <span id="display-nim">NIM: -</span>
+              <span>•</span>
+              <span class="badge bg-secondary py-0" id="display-quiz-id">Kuis: -</span>
+              <span id="autosave-status" class="autosave-pill bg-success-subtle text-success border border-success-subtle">
+                💾 Tersimpan Lokal
+              </span>
+            </div>
           </div>
         </div>
 
         <div class="d-flex align-items-center gap-3">
-          <!-- Indikator Timer Waktu Ujian -->
-          <div class="d-flex align-items-center bg-white border rounded px-3 py-1 shadow-sm">
-            <span class="me-2 fs-5">⏳</span>
+          <!-- Indikator Timer Waktu Ujian (Floating & Monospace) -->
+          <div class="floating-timer-box">
+            <span class="fs-4">⏳</span>
             <div>
-              <small class="text-muted d-block fw-bold" style="font-size: 10px;">SISA WAKTU</small>
-              <span id="quiz-timer" class="fw-bold font-monospace fs-5 text-primary">00:00</span>
+              <small class="text-muted d-block fw-bold" style="font-size: 9px; letter-spacing: 0.5px;">SISA WAKTU</small>
+              <span id="quiz-timer" class="timer-digits font-monospace text-primary">00:00</span>
             </div>
           </div>
 
-          <!-- Indikator Pelanggaran (Berapa dari Berapa) -->
+          <!-- Indikator Pelanggaran -->
           <span class="badge bg-danger fs-6 py-2 px-3 shadow-sm" id="violation-badge">Pelanggaran: 0 / 3</span>
         </div>
       </div>
+    </div>
 
-      <div class="alert alert-warning py-2 small fw-bold">
+    <div class="card card-custom p-4 mt-2">
+      <div class="alert alert-warning py-2 small fw-bold mb-4">
         ⚠️ PERINGATAN: Dilarang Copy-Paste, dilarang pindah tab/aplikasi, dan wajib tetap dalam layar penuh!
       </div>
 
@@ -327,10 +377,28 @@
         <!-- Kontainer Soal-Soal Dinamis -->
         <div id="questions-list"></div>
 
-        <button type="submit" id="btn-submit" class="btn btn-success w-100 fw-bold py-2 mt-3 shadow-sm">
-          Kirim Jawaban Essay
+        <button type="submit" id="btn-submit" class="btn btn-success w-100 fw-bold py-3 mt-4 shadow fs-5">
+          🚀 Selesaikan & Kirim Jawaban Ujian
         </button>
       </form>
+    </div>
+  </div>
+
+  <!-- Modal Progress Pengiriman Jawaban (Auto-Retry saat Kendala Jaringan) -->
+  <div class="modal fade" id="submitProgressModal" data-bs-backdrop="static" data-bs-keyboard="false" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-content border-0 shadow">
+        <div class="modal-body p-4 text-center">
+          <div id="submit-spinner" class="spinner-border text-primary mb-3" style="width: 3.5rem; height: 3.5rem;" role="status"></div>
+          <h5 class="fw-bold mb-2" id="submit-modal-title">Mengirim Jawaban ke Server...</h5>
+          <p class="text-muted small mb-3" id="submit-modal-desc">
+            Mohon jangan menutup jendela ini. Berkas jawaban Anda sedang diamankan dan dikirimkan ke database server.
+          </p>
+          <div id="submit-retry-badge" class="badge bg-warning text-dark px-3 py-2 fs-6 d-none">
+            ⚠️ Koneksi tidak stabil. Mencoba mengirim kembali...
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -342,7 +410,7 @@
       <p class="text-muted" id="finish-message">
         Terima kasih, jawaban Anda telah berhasil terkirim dan tersimpan di server.
       </p>
-      <div class="border rounded p-3 bg-light text-start mx-auto my-3 shadow-sm" style="max-width: 450px;">
+      <div class="border rounded p-3 bg-light text-start mx-auto my-3 shadow-sm" style="max-width: 480px;">
         <div class="mb-1"><b>Nama:</b> <span id="finish-name">-</span></div>
         <div class="mb-1"><b>NIM:</b> <span id="finish-nim">-</span></div>
         <div class="mb-1"><b>ID Kuis:</b> <span id="finish-quiz">-</span></div>
@@ -352,7 +420,18 @@
           <span id="finish-violation" class="badge bg-secondary fs-6 ms-1">0 / 3</span>
         </div>
       </div>
-      <small class="text-muted">Anda dapat menutup jendela browser ini.</small>
+
+      <!-- Tombol Coba Kirim Ulang Manual jika Server Belum Terima -->
+      <div id="retry-submit-wrapper" class="d-none mt-3">
+        <div class="alert alert-warning small mb-2 mx-auto" style="max-width: 480px;">
+          ⚠️ <b>Pemberitahuan:</b> Server belum berhasil menerima jawaban karena kendala jaringan saat waktu habis. Seluruh jawaban Anda telah tersimpan AMAN di perangkat ini. Klik tombol di bawah untuk mencoba mengirim ulang:
+        </div>
+        <button type="button" id="btn-manual-retry" onclick="retryPendingSubmission()" class="btn btn-warning fw-bold px-4 py-2 shadow-sm">
+          🔄 Kirim Ulang Jawaban Sekarang
+        </button>
+      </div>
+
+      <small class="text-muted d-block mt-3">Anda dapat menutup jendela browser ini jika jawaban sudah terkirim.</small>
     </div>
   </div>
 
@@ -598,25 +677,36 @@
       await registerLiveSession();
     });
 
-    // --- LOGIKA TIMER HITUNG MUNDUR (COUNTDOWN TIMER) ---
+    // --- LOGIKA TIMER HITUNG MUNDUR DENGAN DEADLINE ABSOLUT (ANTI MOLOR) ---
+    let quizDeadlineTimestamp = null;
+
     function startQuizTimer() {
       let durationMinutes = 60;
       if (quizSettings && quizSettings.duration_minutes) {
         durationMinutes = parseInt(quizSettings.duration_minutes);
       }
 
-      remainingSeconds = durationMinutes * 60;
+      if (!sessionStartTime) {
+        sessionStartTime = Date.now();
+      }
 
-      // Jika ada waktu tutup (end_time), batasi agar tidak melebihi jam tutup
+      // 1. Batas waktu durasi pengerjaan sejak klik mulai (misal 15 menit)
+      const durationEndTime = sessionStartTime + (durationMinutes * 60 * 1000);
+
+      // 2. Batas waktu tutup jadwal kuis dari database (jika ada end_time)
+      let scheduleEndTime = Infinity;
       if (quizSettings && quizSettings.end_time) {
-        const endTime = new Date(quizSettings.end_time).getTime();
-        const now = Date.now();
-        const diffSeconds = Math.floor((endTime - now) / 1000);
-        if (diffSeconds > 0 && diffSeconds < remainingSeconds) {
-          remainingSeconds = diffSeconds;
+        const parsedEnd = new Date(quizSettings.end_time).getTime();
+        if (!isNaN(parsedEnd)) {
+          scheduleEndTime = parsedEnd;
         }
       }
 
+      // DEADLINE MUTLAK adalah MANA YANG LEBIH CEPAT: durasi kuis atau jam tutup kuis!
+      quizDeadlineTimestamp = Math.min(durationEndTime, scheduleEndTime);
+
+      // Hitung sisa detik awal
+      remainingSeconds = Math.max(0, Math.floor((quizDeadlineTimestamp - Date.now()) / 1000));
       updateTimerDisplay();
 
       if (timerInterval) clearInterval(timerInterval);
@@ -626,12 +716,16 @@
           return;
         }
 
-        remainingSeconds--;
+        // Hitung sisa detik berdasarkan jam riil (Date.now())
+        // Kebal dari freeze/sleep laptop, idle tab, dan tab throttling browser!
+        remainingSeconds = Math.max(0, Math.floor((quizDeadlineTimestamp - Date.now()) / 1000));
         updateTimerDisplay();
 
         if (remainingSeconds <= 0) {
           clearInterval(timerInterval);
-          showViolationToast('WAKTU HABIS', 'Waktu pengerjaan ujian telah berakhir! Jawaban Anda dikirim secara otomatis.');
+          remainingSeconds = 0;
+          updateTimerDisplay();
+          showViolationToast('WAKTU HABIS', 'Waktu pengerjaan ujian telah berakhir! Jawaban Anda sedang dikirimkan secara otomatis.');
           autoSubmitQuiz('TIME_EXPIRED');
         }
       }, 1000);
@@ -639,6 +733,7 @@
 
     function updateTimerDisplay() {
       const timerEl = document.getElementById('quiz-timer');
+      if (!timerEl) return;
       const hours = Math.floor(remainingSeconds / 3600);
       const minutes = Math.floor((remainingSeconds % 3600) / 60);
       const seconds = remainingSeconds % 60;
@@ -653,12 +748,88 @@
 
       // Visual Warning saat waktu menipis
       if (remainingSeconds <= 60) { // < 1 menit
-        timerEl.className = 'fw-bold font-monospace fs-5 text-danger pulse-danger';
+        timerEl.className = 'timer-digits font-monospace text-danger pulse-danger';
       } else if (remainingSeconds <= 300) { // < 5 menit
-        timerEl.className = 'fw-bold font-monospace fs-5 text-warning';
+        timerEl.className = 'timer-digits font-monospace text-warning';
       } else {
-        timerEl.className = 'fw-bold font-monospace fs-5 text-primary';
+        timerEl.className = 'timer-digits font-monospace text-primary';
       }
+    }
+
+    // --- FITUR AUTO-SAVE REAL-TIME KE LOCALSTORAGE (ANTI-CRASH) ---
+    let autoSaveDebounceTimer = null;
+
+    function triggerAutoSave() {
+      if (autoSaveDebounceTimer) clearTimeout(autoSaveDebounceTimer);
+      autoSaveDebounceTimer = setTimeout(() => {
+        saveDraftToLocal();
+      }, 400);
+    }
+
+    function saveDraftToLocal() {
+      if (!isLoggedIn || isSubmitted || !userNim || !quizId) return;
+      const answers = collectCurrentAnswers();
+      const draftObj = {
+        userId: userNama,
+        nim: userNim,
+        quizId: quizId,
+        answers: answers,
+        savedAt: Date.now()
+      };
+      try {
+        localStorage.setItem(`quiz_draft_${quizId}_${userNim}`, JSON.stringify(draftObj));
+        const statusEl = document.getElementById('autosave-status');
+        if (statusEl) {
+          const nowStr = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+          statusEl.textContent = `💾 Tersimpan (${nowStr})`;
+          statusEl.className = 'autosave-pill bg-success-subtle text-success border border-success-subtle';
+        }
+      } catch (e) {
+        console.warn('Gagal menyimpan draf lokal:', e);
+      }
+    }
+
+    function restoreDraftAnswers() {
+      if (!userNim || !quizId) return;
+      try {
+        const raw = localStorage.getItem(`quiz_draft_${quizId}_${userNim}`);
+        if (!raw) return;
+        const draft = JSON.parse(raw);
+        if (draft && draft.answers) {
+          const cards = document.querySelectorAll('.question-item');
+          let restoredCount = 0;
+          cards.forEach((card, index) => {
+            const qNum = index + 1;
+            const qText = card.dataset.questionText || `Soal ${qNum}`;
+            const key = `${qNum}. ${qText}`;
+            const ta = card.querySelector('textarea');
+            if (ta && draft.answers[key] !== undefined && draft.answers[key] !== '') {
+              ta.value = draft.answers[key];
+              restoredCount++;
+            }
+          });
+          if (restoredCount > 0) {
+            console.log(`✅ Berhasil memulihkan ${restoredCount} draft jawaban dari cache lokal.`);
+            const statusEl = document.getElementById('autosave-status');
+            if (statusEl) statusEl.textContent = '💾 Draf Dipulihkan';
+          }
+        }
+      } catch (e) {
+        console.warn('Error saat memulihkan draft:', e);
+      }
+    }
+
+    function collectCurrentAnswers() {
+      const answers = {};
+      const questionCards = document.querySelectorAll('.question-item');
+      questionCards.forEach((card, index) => {
+        const qNum = index + 1;
+        const qText = card.dataset.questionText || `Soal ${qNum}`;
+        const textarea = card.querySelector('textarea');
+        const answerVal = textarea ? textarea.value.trim() : '';
+        answers[`${qNum}. ${qText}`] = answerVal;
+      });
+      return answers;
     }
 
     // --- FUNGSI MEMUAT SOAL DINAMIS DARI BACKEND ---
@@ -703,6 +874,7 @@
 
       renderQuestions(questions);
       setupQuestionFocusTracking();
+      restoreDraftAnswers(); // Pulihkan jawaban jika pernah crash/refresh
 
       loadingEl.classList.add('d-none');
       formEl.classList.remove('d-none');
@@ -740,6 +912,11 @@
               required></textarea>
           </div>
         `;
+
+        const textareaEl = questionCard.querySelector('textarea');
+        if (textareaEl) {
+          textareaEl.addEventListener('input', triggerAutoSave);
+        }
 
         listEl.appendChild(questionCard);
       });
@@ -974,11 +1151,11 @@
 
       if (reason === 'DISQUALIFIED') {
         showViolationToast('DISKUALIFIKASI', 'Pelanggaran mencapai batas maksimal! Ujian dihentikan dan jawaban dikirim otomatis.');
+      } else if (reason === 'TIME_EXPIRED') {
+        showViolationToast('WAKTU HABIS', 'Waktu pengerjaan ujian telah berakhir! Berkas jawaban Anda sedang dikirim secara otomatis ke database.');
       }
 
-      setTimeout(() => {
-        submitData(reason);
-      }, 1000);
+      submitData(reason);
     }
 
     function disableForm() {
@@ -988,41 +1165,181 @@
       }
     }
 
-    // --- PENGIRIMAN JAWABAN SECARA DINAMIS DENGAN LAPORAN PELANGGARAN ---
+    // --- PENGIRIMAN JAWABAN SECARA DINAMIS DENGAN AUTO-RETRY & OFFLINE QUEUE (ANTI-CRASH) ---
+    let submitProgressModalInstance = null;
+
     async function submitData(status = 'COMPLETED') {
-      const answers = {};
-      const questionCards = document.querySelectorAll('.question-item');
+      // 1. Kumpulkan jawaban (fallback ke localStorage draft jika form kosong)
+      let answers = collectCurrentAnswers();
+      const hasSomeAnswers = Object.values(answers).some(a => a && a.trim() !== '');
+      if (!hasSomeAnswers) {
+        try {
+          const rawDraft = localStorage.getItem(`quiz_draft_${quizId}_${userNim}`);
+          if (rawDraft) {
+            const draft = JSON.parse(rawDraft);
+            if (draft && draft.answers) answers = draft.answers;
+          }
+        } catch (e) {}
+      }
 
-      questionCards.forEach((card, index) => {
-        const qNum = index + 1;
-        const qText = card.dataset.questionText || `Soal ${qNum}`;
-        const textarea = card.querySelector('textarea');
-        const answerVal = textarea ? textarea.value.trim() : '';
-        answers[`${qNum}. ${qText}`] = answerVal;
-      });
+      const payload = {
+        userId: userNama,
+        nim: userNim,
+        quizId: quizId,
+        answers: answers,
+        status: status,
+        violationCount: violationCount,
+        maxViolations: MAX_VIOLATIONS,
+        submittedAtLocal: new Date().toISOString()
+      };
 
+      // 2. Simpan cadangan offline darurat ke localStorage sebelum kirim
+      const pendingKey = `quiz_pending_submit_${quizId}_${userNim}`;
       try {
+        localStorage.setItem(pendingKey, JSON.stringify(payload));
+      } catch (e) {}
+
+      // 3. Tampilkan Modal Progress Pengiriman
+      try {
+        const modalEl = document.getElementById('submitProgressModal');
+        if (modalEl && typeof bootstrap !== 'undefined') {
+          submitProgressModalInstance = new bootstrap.Modal(modalEl);
+          submitProgressModalInstance.show();
+        }
+      } catch (e) {}
+
+      // 4. Jalankan Submit Engine dengan Auto-Retry
+      await executeSubmitWithRetry(payload, pendingKey, 1, 5);
+    }
+
+    async function executeSubmitWithRetry(payload, pendingKey, attempt = 1, maxAttempts = 5) {
+      const titleEl = document.getElementById('submit-modal-title');
+      const retryBadge = document.getElementById('submit-retry-badge');
+
+      if (titleEl) {
+        titleEl.textContent = `Mengirim Jawaban ke Server... (${attempt}/${maxAttempts})`;
+      }
+      if (attempt > 1 && retryBadge) {
+        retryBadge.classList.remove('d-none');
+        retryBadge.textContent = `⚠️ Jaringan kurang stabil. Mencoba kirim ulang (${attempt}/${maxAttempts})...`;
+      }
+
+      let isSuccess = false;
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 12000); // 12 detik timeout
+
         const res = await fetch(API_SUBMIT_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            userId: userNama,
-            nim: userNim,
-            quizId: quizId,
-            answers: answers,
-            status: status,
-            violationCount: violationCount,
-            maxViolations: MAX_VIOLATIONS
-          })
+          body: JSON.stringify(payload),
+          signal: controller.signal
         });
+        clearTimeout(timeoutId);
 
-        const resData = await res.json();
-        showFinishScreen(status, 'Jawaban dan rekap hasil pengerjaan Anda telah berhasil terkirim ke server.');
+        if (res.ok) {
+          const resData = await res.json();
+          if (resData.status === 'success') {
+            isSuccess = true;
+          }
+        }
       } catch (err) {
-        console.error('Error saat submit:', err);
-        showFinishScreen(status, 'Terkendala jaringan saat submit, data jawaban disimpan ke cache lokal.');
+        console.warn(`Gagal kirim submit (percobaan ${attempt}):`, err);
+      }
+
+      if (isSuccess) {
+        // Berhasil! Hapus pending submission & draft karena sudah masuk database
+        try {
+          localStorage.removeItem(pendingKey);
+          localStorage.removeItem(`quiz_draft_${quizId}_${userNim}`);
+        } catch (e) {}
+
+        if (submitProgressModalInstance) {
+          try { submitProgressModalInstance.hide(); } catch (e) {}
+        }
+        showFinishScreen(payload.status, 'Jawaban dan rekap hasil pengerjaan Anda telah berhasil terkirim dan tersimpan aman di server.');
+      } else {
+        // Jika gagal dan masih ada kuota percobaan
+        if (attempt < maxAttempts) {
+          setTimeout(() => {
+            executeSubmitWithRetry(payload, pendingKey, attempt + 1, maxAttempts);
+          }, 2500);
+        } else {
+          // Jika 5 kali percobaan berturut-turut gagal karena kendala jaringan
+          if (submitProgressModalInstance) {
+            try { submitProgressModalInstance.hide(); } catch (e) {}
+          }
+          showFinishScreen(
+            payload.status,
+            '⚠️ Terkendala Jaringan saat submit! Seluruh berkas jawaban Anda tersimpan AMAN di perangkat ini. Klik tombol di bawah setelah koneksi internet kembali normal.'
+          );
+          const retryWrapper = document.getElementById('retry-submit-wrapper');
+          if (retryWrapper) retryWrapper.classList.remove('d-none');
+        }
       }
     }
+
+    // Fungsi coba kirim ulang manual jika sebelumnya offline
+    async function retryPendingSubmission() {
+      const pendingKey = `quiz_pending_submit_${quizId}_${userNim}`;
+      const raw = localStorage.getItem(pendingKey);
+      if (!raw) {
+        alert('Tidak ada berkas pending atau jawaban sudah terkirim.');
+        return;
+      }
+      try {
+        const payload = JSON.parse(raw);
+        const retryBtn = document.getElementById('btn-manual-retry');
+        if (retryBtn) {
+          retryBtn.disabled = true;
+          retryBtn.innerHTML = '⏳ Sedang Mengirimkan Ulang...';
+        }
+
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 12000);
+
+        const res = await fetch(API_SUBMIT_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+          signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+
+        if (res.ok) {
+          const resData = await res.json();
+          if (resData.status === 'success') {
+            localStorage.removeItem(pendingKey);
+            localStorage.removeItem(`quiz_draft_${quizId}_${userNim}`);
+            alert('✅ Berhasil! Jawaban Anda telah sukses terkirim dan tersimpan di server.');
+            const retryWrapper = document.getElementById('retry-submit-wrapper');
+            if (retryWrapper) retryWrapper.classList.add('d-none');
+            document.getElementById('finish-message').textContent = 'Jawaban Anda telah berhasil terkirim dan tersimpan di server.';
+            return;
+          }
+        }
+        alert('Gagal mengirim ke server. Pastikan koneksi internet aktif lalu coba lagi.');
+      } catch (e) {
+        alert('Koneksi internet masih bermasalah: ' + e.message);
+      } finally {
+        const retryBtn = document.getElementById('btn-manual-retry');
+        if (retryBtn) {
+          retryBtn.disabled = false;
+          retryBtn.innerHTML = '🔄 Kirim Ulang Jawaban Sekarang';
+        }
+      }
+    }
+
+    // Listener auto-retry saat kembali online
+    window.addEventListener('online', () => {
+      console.log('🌐 Koneksi internet terhubung kembali!');
+      if (isSubmitted) {
+        const pendingKey = `quiz_pending_submit_${quizId}_${userNim}`;
+        if (localStorage.getItem(pendingKey)) {
+          retryPendingSubmission();
+        }
+      }
+    });
 
     function showFinishScreen(status, message) {
       if (timerInterval) clearInterval(timerInterval);
