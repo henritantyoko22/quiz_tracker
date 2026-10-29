@@ -1083,8 +1083,11 @@ const sendReactApp = (req, res) => {
   <script src="https://cdn.jsdelivr.net/npm/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin></script>
   <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.24.7/babel.min.js" crossorigin></script>
 
-  <!-- Bundled Modular React Code from /src/**/*.jsx -->
-  <script type="text/babel" data-presets="react">
+  <!-- Shim CommonJS agar Babel in-browser tidak error "exports is not defined" -->
+  <script>window.exports = {}; window.module = { exports: window.exports };</script>
+
+  <!-- Bundled Modular React Code from /src/**/*.jsx (JSX saja, tanpa transform modul) -->
+  <script type="text/babel" data-presets="react" data-type="text/javascript">
 ${jsxBundle}
   </script>
 </body>
@@ -1096,6 +1099,7 @@ ${jsxBundle}
   }
 };
 
+app.get('/favicon.ico', (req, res) => res.status(204).end());
 app.get('/', sendReactApp);
 app.get('/quiz', sendReactApp);
 app.get('/quiz.html', sendReactApp);
