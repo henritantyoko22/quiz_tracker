@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const fs = require('fs');
 const crypto = require('crypto');
 const db = require('./db'); // Konfigurasi koneksi PostgreSQL Neon.tech
 
@@ -9,7 +10,8 @@ const app = express();
 
 app.use(cors());
 app.use(express.json());
-app.use(express.static(__dirname));
+app.use('/src', express.static(path.join(__dirname, 'src')));
+app.use(express.static(path.join(__dirname, 'public')));
 
 // -------------------------------------------------------------
 // HELPER PASSWORD HASHING (PBKDF2 + SALT)
@@ -199,18 +201,40 @@ initDbTables();
 // 1. ENDPOINT KUIS (SOAL, SUBMIT, PENGATURAN & JADWAL TIMER)
 // -------------------------------------------------------------
 
-// Mengambil daftar quizId yang tersedia
+// Mengambil daftar quizId yang tersedia beserta jumlah soal & pengaturan timernya
 app.get('/v1/quiz/list', async (req, res) => {
   try {
     const result = await db.query(
-      `SELECT DISTINCT quiz_id, COUNT(*) AS total_questions 
-       FROM quiz_questions 
-       GROUP BY quiz_id 
-       ORDER BY quiz_id ASC`
+      `SELECT 
+         COALESCE(q.quiz_id, s.quiz_id) AS quiz_id,
+         COALESCE(q.total_questions, 0)::int AS total_questions,
+         COALESCE(s.duration_minutes, 60)::int AS duration_minutes,
+         COALESCE(s.max_violations, 3)::int AS max_violations,
+         COALESCE(s.is_active, TRUE) AS is_active,
+         s.start_time,
+         s.end_time,
+         s.updated_at
+       FROM (
+         SELECT quiz_id, COUNT(*) AS total_questions
+         FROM quiz_questions
+         GROUP BY quiz_id
+       ) q
+       FULL OUTER JOIN quiz_settings s ON s.quiz_id = q.quiz_id
+       ORDER BY COALESCE(q.quiz_id, s.quiz_id) ASC`
     );
     res.json({ status: 'success', data: result.rows });
   } catch (err) {
-    res.status(500).json({ status: 'error', message: err.message });
+    try {
+      const fallback = await db.query(
+        `SELECT DISTINCT quiz_id, COUNT(*) AS total_questions 
+         FROM quiz_questions 
+         GROUP BY quiz_id 
+         ORDER BY quiz_id ASC`
+      );
+      res.json({ status: 'success', data: fallback.rows });
+    } catch (fallbackErr) {
+      res.status(500).json({ status: 'error', message: err.message });
+    }
   }
 });
 
@@ -957,27 +981,90 @@ app.post('/v1/admin/submissions/grade', authenticate, requireRole('SUPERADMIN', 
   }
 });
 
-// Impor Soal Baru - Hanya SUPERADMIN & DOSEN
+// Impor / Simpan Soal - Hanya SUPERADMIN & DOSEN
 app.post('/v1/admin/questions/import', authenticate, requireRole('SUPERADMIN', 'DOSEN'), async (req, res) => {
-  const { quizId, questions } = req.body;
+  const { quizId, questions, replaceExisting } = req.body;
+  if (!quizId || !Array.isArray(questions)) {
+    return res.status(400).json({ status: 'error', message: 'quizId dan array questions wajib diisi!' });
+  }
+  const cleanQuizId = String(quizId).trim();
   try {
+    if (replaceExisting) {
+      await db.query('DELETE FROM quiz_questions WHERE quiz_id = $1', [cleanQuizId]);
+    }
     for (const q of questions) {
+      const text = (q.question_text || q.question || '').trim();
+      if (!text) continue;
       await db.query(
         `INSERT INTO quiz_questions (quiz_id, question_text, question_type)
          VALUES ($1, $2, $3)`,
-        [quizId, q.question_text || q.question, q.question_type || 'ESSAY']
+        [cleanQuizId, text, q.question_type || 'ESSAY']
       );
     }
-    res.json({ status: 'success', message: `${questions.length} soal berhasil diimpor!` });
+    res.json({ status: 'success', message: `${questions.length} soal untuk Kuis #${cleanQuizId} berhasil disimpan!` });
   } catch (err) {
     res.status(500).json({ status: 'error', message: err.message });
   }
 });
 
-// Routing Halaman Static
-app.get('/quiz', (req, res) => res.sendFile(path.join(__dirname, 'quiz.html')));
-app.get('/admin', (req, res) => res.sendFile(path.join(__dirname, 'admin.html')));
-app.get('/admin-dashboard', (req, res) => res.sendFile(path.join(__dirname, 'admin-dashboard.html')));
+// Hapus satu butir soal berdasarkan ID - Hanya SUPERADMIN & DOSEN
+app.delete('/v1/admin/questions/:id', authenticate, requireRole('SUPERADMIN', 'DOSEN'), async (req, res) => {
+  const questionId = parseInt(req.params.id);
+  if (!questionId) {
+    return res.status(400).json({ status: 'error', message: 'ID soal tidak valid.' });
+  }
+  try {
+    await db.query('DELETE FROM quiz_questions WHERE id = $1', [questionId]);
+    res.json({ status: 'success', message: 'Butir soal berhasil dihapus.' });
+  } catch (err) {
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+});
+
+// Dynamic React Modular Bundle (menggabungkan struktur src/ tanpa perlu bundler eksternal)
+const REACT_MODULE_FILES = [
+  'src/services/api.js',
+  'src/components/admin/SubmissionRow.jsx',
+  'src/components/admin/LiveSessionRow.jsx',
+  'src/components/admin/AdminModals.jsx',
+  'src/components/admin/UnifiedQuizManager.jsx',
+  'src/components/admin/UserManager.jsx',
+  'src/components/quiz/StickyExamHeader.jsx',
+  'src/components/quiz/QuestionCard.jsx',
+  'src/pages/AdminDashboardPage.jsx',
+  'src/pages/StudentQuizPage.jsx',
+  'src/App.jsx',
+  'src/main.jsx'
+];
+
+app.get('/bundle.jsx', (req, res) => {
+  try {
+    const chunks = [
+      'const { useState, useEffect, useMemo, useCallback, useRef, memo } = React;'
+    ];
+    for (const relPath of REACT_MODULE_FILES) {
+      const fullPath = path.join(__dirname, relPath);
+      const raw = fs.readFileSync(fullPath, 'utf8');
+      // Strip ES module import lines & export keywords so Babel compiles in shared scope
+      const transformed = raw
+        .replace(/^\s*import\s+[\s\S]*?from\s+['"][^'"]+['"];?\s*$/gm, '')
+        .replace(/^\s*export\s+default\s+/gm, '')
+        .replace(/^\s*export\s+(const|function|let|var|class)\s+/gm, '$1 ');
+      chunks.push(`\n// --- MODULE: ${relPath} ---\n${transformed}`);
+    }
+    res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+    res.send(chunks.join('\n'));
+  } catch (err) {
+    res.status(500).send(`console.error("Failed to build React bundle:", ${JSON.stringify(err.message)});`);
+  }
+});
+
+// Routing Halaman SPA React.js
+const sendReactApp = (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html'));
+app.get('/', sendReactApp);
+app.get('/quiz', sendReactApp);
+app.get('/admin', sendReactApp);
+app.get('/admin-dashboard', sendReactApp);
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Server API berjalan di port ${PORT}`));
