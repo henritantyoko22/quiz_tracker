@@ -2,6 +2,7 @@ import React, { useState, useEffect, memo } from 'react';
 import { parseAnswersObject } from '../../services/api.js';
 
 export const SubmissionRow = memo(function SubmissionRow({
+  index,
   sub,
   role,
   onSaveGrade,
@@ -33,6 +34,17 @@ export const SubmissionRow = memo(function SubmissionRow({
 
   return (
     <tr>
+      <td
+        style={{
+          width: 48,
+          textAlign: 'center',
+          fontWeight: 700,
+          color: '#64748b',
+          fontSize: '0.84rem',
+        }}
+      >
+        {typeof index === 'number' ? index + 1 : '-'}
+      </td>
       <td>
         <div style={{ fontWeight: 700, color: '#0f172a' }}>{sub.nama || '-'}</div>
         <div style={{ fontSize: '0.75rem', color: '#64748b' }}>NIM: {sub.nim || '-'}</div>

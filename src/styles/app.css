@@ -248,20 +248,27 @@ body {
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06);
 }
 
-/* Compact Filter Bar */
+/* Compact Filter Bar & Filter Panel */
 .compact-filter-bar {
   background: #ffffff;
   border-radius: 10px;
-  padding: 8px 14px;
+  padding: 10px 14px;
   border: 1px solid #e2e8f0;
   margin-bottom: 10px;
   display: flex;
-  align-items: center;
+  flex-direction: column;
   gap: 10px;
   flex-shrink: 0;
 }
+.filter-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
 .filter-input {
   flex: 1;
+  min-width: 220px;
   max-width: 320px;
   padding: 6px 12px;
   border-radius: 7px;
@@ -280,14 +287,18 @@ body {
   background: #ffffff;
   color: #334155;
   outline: none;
+  cursor: pointer;
+}
+.filter-select:focus {
+  border-color: #4f46e5;
 }
 
 /* Main Workspace & Table */
 .workspace-panel {
   background: #ffffff;
-  border-radius: 12px;
-  border: 1px solid #e2e8f0;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  border-radius: 10px;
+  border: 1px solid #dee2e6;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
   flex: 1;
   min-height: 0;
   display: flex;
@@ -311,25 +322,24 @@ body {
   position: sticky;
   top: 0;
   z-index: 5;
-  background: #0f172a;
+  background: #212529; /* Tema table-dark Bootstrap dari halaman sebelumnya */
   color: #ffffff;
-  font-size: 0.78rem;
-  letter-spacing: 0.3px;
-  text-transform: uppercase;
-  padding: 10px 14px;
+  font-size: 0.8rem;
+  letter-spacing: 0.2px;
+  padding: 11px 14px;
   font-weight: 700;
-  border: none;
+  border-bottom: 2px solid #373b3e;
   white-space: nowrap;
 }
 .data-table tbody tr {
-  border-bottom: 1px solid #f1f5f9;
-  transition: background 0.1s ease;
+  border-bottom: 1px solid #dee2e6;
+  transition: background 0.15s ease;
 }
 .data-table tbody tr:hover {
-  background: #f8fafc;
+  background-color: rgba(13, 110, 253, 0.05); /* Hover khas Bootstrap dari page sebelumnya */
 }
 .data-table tbody td {
-  padding: 10px 14px;
+  padding: 11px 14px;
   font-size: 0.84rem;
   vertical-align: middle;
 }

@@ -284,7 +284,7 @@ export function LiveDetailModal({ targetSession, token, onClose }) {
     >
       <div
         className="modal-card"
-        style={{ maxWidth: 840 }}
+        style={{ maxWidth: 960, width: '95vw', maxHeight: '92vh' }}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="modal-header">
@@ -372,46 +372,61 @@ export function LiveDetailModal({ targetSession, token, onClose }) {
             </div>
           </div>
 
-          <div
-            style={{ display: 'grid', gridTemplateColumns: '1fr 1.25fr', gap: 16 }}
-          >
-            <div
-              style={{
-                border: '1px solid #e2e8f0',
-                borderRadius: 10,
-                padding: 14,
-                background: '#f8fafc',
-              }}
-            >
-              <div style={{ fontWeight: 700, fontSize: '0.84rem', marginBottom: 10 }}>
-                ⏱️ Durasi Pengerjaan per Nomor Soal
+          {/* SECTION 1: BREAKDOWN DURASI PER SOAL (GRID CARDS) */}
+          <div style={{ marginBottom: 18 }}>
+            <div style={{ fontWeight: 800, fontSize: '0.88rem', color: '#0f172a', marginBottom: 10 }}>
+              📊 Durasi Pengerjaan per Nomor Soal
+            </div>
+            {timingsArr.length === 0 ? (
+              <div style={{ fontSize: '0.82rem', color: '#94a3b8', padding: '12px 0' }}>
+                Belum ada data durasi per soal.
               </div>
-              {timingsArr.length === 0 ? (
-                <div style={{ fontSize: '0.8rem', color: '#94a3b8' }}>
-                  Belum ada data durasi per soal.
-                </div>
-              ) : (
-                timingsArr.map((t, idx) => {
+            ) : (
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+                  gap: 12,
+                }}
+              >
+                {timingsArr.map((t, idx) => {
                   const sec = Number(t.totalSeconds) || 0;
                   const pct = Math.min(100, Math.round((sec / maxQSec) * 100));
+                  const isCurrentActive =
+                    idx === Number(detail.currentQuestionIndex) && detail.status === 'ACTIVE';
+
                   return (
-                    <div key={t.qNum || idx} style={{ marginBottom: 10 }}>
+                    <div
+                      key={t.qNum || idx}
+                      style={{
+                        background: isCurrentActive ? '#fef2f2' : '#f8fafc',
+                        border: `1px solid ${isCurrentActive ? '#fca5a5' : '#e2e8f0'}`,
+                        borderRadius: 10,
+                        padding: '12px 14px',
+                        boxShadow: isCurrentActive ? '0 2px 8px rgba(220, 38, 38, 0.12)' : 'none',
+                      }}
+                    >
                       <div
                         style={{
                           display: 'flex',
                           justifyContent: 'space-between',
-                          fontSize: '0.78rem',
-                          fontWeight: 600,
-                          marginBottom: 3,
+                          alignItems: 'center',
+                          marginBottom: 6,
                         }}
                       >
-                        <span style={{ color: '#1e293b' }}>
-                          Soal #{t.qNum || idx + 1}
-                          <span style={{ fontSize: '0.7rem', color: '#64748b', marginLeft: 4 }}>
-                            ({t.switchCount || 1}x dibuka)
-                          </span>
+                        <span
+                          className={`badge ${isCurrentActive ? 'badge-danger' : 'badge-info'}`}
+                          style={{ fontSize: '0.74rem' }}
+                        >
+                          Soal #{t.qNum || idx + 1} {isCurrentActive ? '● Sedang Dikerjakan' : ''}
                         </span>
-                        <span style={{ color: '#4f46e5', fontWeight: 700 }}>
+                        <span
+                          style={{
+                            fontWeight: 800,
+                            fontSize: '0.88rem',
+                            color: isCurrentActive ? '#dc2626' : '#4f46e5',
+                          }}
+                        >
                           {formatDuration(sec)}
                         </span>
                       </div>
@@ -421,117 +436,160 @@ export function LiveDetailModal({ targetSession, token, onClose }) {
                           background: '#e2e8f0',
                           borderRadius: 99,
                           overflow: 'hidden',
+                          margin: '8px 0',
                         }}
                       >
                         <div
                           style={{
                             width: `${pct}%`,
                             height: '100%',
-                            background: '#4f46e5',
+                            background: isCurrentActive ? '#dc2626' : '#4f46e5',
                             transition: 'width 0.4s ease',
                           }}
                         />
                       </div>
-                      {t.qText && (
-                        <div
-                          style={{
-                            fontSize: '0.7rem',
-                            color: '#64748b',
-                            marginTop: 2,
-                            whiteSpace: 'nowrap',
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                          }}
-                          title={t.qText}
-                        >
-                          {t.qText}
-                        </div>
-                      )}
+                      <div
+                        style={{
+                          fontSize: '0.75rem',
+                          color: '#475569',
+                          lineHeight: 1.4,
+                          marginBottom: 6,
+                          wordBreak: 'break-word',
+                        }}
+                      >
+                        {t.qText || `Soal nomor ${t.qNum || idx + 1}`}
+                      </div>
+                      <div style={{ fontSize: '0.72rem', color: '#64748b' }}>
+                        🔄 Ditinjau / dibuka: <b>{t.switchCount || 1}x</b>
+                      </div>
                     </div>
                   );
-                })
-              )}
-            </div>
+                })}
+              </div>
+            )}
+          </div>
 
+          {/* SECTION 2: TIMELINE LOG DETIK DEMI DETIK (TABLE SEPERTI HALAMAN SEBELUMNYA) */}
+          <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, overflow: 'hidden' }}>
             <div
               style={{
-                border: '1px solid #e2e8f0',
-                borderRadius: 10,
-                padding: 14,
+                padding: '10px 14px',
                 background: '#f8fafc',
-                maxHeight: 340,
-                overflowY: 'auto',
+                borderBottom: '1px solid #e2e8f0',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
               }}
             >
-              <div style={{ fontWeight: 700, fontSize: '0.84rem', marginBottom: 10 }}>
-                📜 Timeline Aktivitas Mahasiswa ({events.length})
+              <div style={{ fontWeight: 800, fontSize: '0.88rem', color: '#0f172a' }}>
+                📜 Timeline Log Detik & Perpindahan Soal ({events.length})
               </div>
-              {events.length === 0 ? (
-                <div style={{ fontSize: '0.8rem', color: '#94a3b8' }}>
-                  Belum ada log aktivitas.
-                </div>
-              ) : (
-                events.map((ev, idx) => {
-                  const b = getBadgeInfo(ev.type);
-                  const jamRiil = ev.timestampISO
-                    ? new Date(ev.timestampISO).toLocaleTimeString('id-ID')
-                    : ev.timestamp
-                    ? new Date(ev.timestamp).toLocaleTimeString('id-ID')
-                    : '';
-                  const elapsedText = `Detik ke-${ev.elapsedSeconds || 0} (${formatDuration(
-                    ev.elapsedSeconds || 0
-                  )})`;
+              <div style={{ fontSize: '0.75rem', color: '#64748b' }}>
+                Mencatat kapan mulai, berapa detik di tiap soal, pelanggaran, dan waktu submit
+              </div>
+            </div>
 
-                  return (
-                    <div
-                      key={idx}
-                      style={{
-                        padding: '8px 10px',
-                        borderBottom: '1px solid #e2e8f0',
-                        fontSize: '0.78rem',
-                      }}
-                    >
-                      <div
-                        style={{
-                          display: 'flex',
-                          justifyContent: 'space-between',
-                          alignItems: 'center',
-                          marginBottom: 2,
-                        }}
-                      >
-                        <span
+            <div style={{ maxHeight: 320, overflowY: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.78rem' }}>
+                <thead
+                  style={{
+                    position: 'sticky',
+                    top: 0,
+                    zIndex: 2,
+                    background: '#212529',
+                    color: '#ffffff',
+                  }}
+                >
+                  <tr>
+                    <th style={{ padding: '8px 10px', textAlign: 'center', width: 44 }}>#</th>
+                    <th style={{ padding: '8px 10px', width: 140 }}>Waktu Ujian</th>
+                    <th style={{ padding: '8px 10px', width: 100 }}>Jam Riil</th>
+                    <th style={{ padding: '8px 10px', width: 150 }}>Jenis Aktivitas</th>
+                    <th style={{ padding: '8px 10px' }}>Detail Aktivitas</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {events.length === 0 ? (
+                    <tr>
+                      <td colSpan="5" style={{ textAlign: 'center', padding: 24, color: '#94a3b8' }}>
+                        Belum ada riwayat aktivitas yang tercatat.
+                      </td>
+                    </tr>
+                  ) : (
+                    events.map((ev, idx) => {
+                      const b = getBadgeInfo(ev.type);
+                      const jamRiil = ev.timestampISO
+                        ? new Date(ev.timestampISO).toLocaleTimeString('id-ID')
+                        : ev.timestamp
+                        ? new Date(ev.timestamp).toLocaleTimeString('id-ID')
+                        : '-';
+                      const elapsedText = `Detik ke-${ev.elapsedSeconds || 0} (${formatDuration(
+                        ev.elapsedSeconds || 0
+                      )})`;
+
+                      let detailMsg = '';
+                      if (ev.type === 'SESSION_START' || ev.type === 'START') {
+                        detailMsg = `Mahasiswa resmi memulai ujian untuk kuis #${detail.quizId}.`;
+                      } else if (ev.type === 'QUESTION_FOCUS') {
+                        detailMsg = `Membuka dan mulai mengerjakan Soal #${ev.questionNum}: ${ev.questionText || ''}`;
+                      } else if (ev.type === 'QUESTION_LEAVE') {
+                        detailMsg = `Selesai sementara di Soal #${ev.questionNum}, berpindah fokus ke soal lain.`;
+                      } else if (ev.type === 'QUESTION_SWITCH') {
+                        detailMsg = `Berpindah fokus ke Soal #${ev.questionNum}: ${ev.questionText || ''}`;
+                      } else if (ev.type === 'VIOLATION') {
+                        detailMsg = ev.questionText || ev.detail || 'Terjadi pelanggaran proctoring!';
+                      } else if (ev.type === 'SUBMIT' || ev.type === 'SUBMITTED') {
+                        detailMsg = `Mahasiswa menyelesaikan ujian dan mengirim seluruh berkas jawaban (${detail.status || 'SUBMITTED'}).`;
+                      } else if (ev.type === 'DISQUALIFIED') {
+                        detailMsg = `Mahasiswa terkena diskualifikasi otomatis karena melebihi toleransi pelanggaran.`;
+                      } else {
+                        detailMsg = ev.questionText || ev.detail || '-';
+                      }
+
+                      return (
+                        <tr
+                          key={idx}
                           style={{
-                            fontSize: '0.7rem',
-                            fontWeight: 700,
-                            padding: '2px 6px',
-                            borderRadius: 4,
-                            background: b.bg,
-                            color: b.color,
+                            borderBottom: '1px solid #f1f5f9',
+                            background: idx % 2 === 0 ? '#ffffff' : '#f8fafc',
                           }}
                         >
-                          {b.label}
-                        </span>
-                        <div style={{ fontSize: '0.72rem', color: '#64748b' }}>
-                          <span style={{ fontWeight: 600, color: '#4f46e5', marginRight: 6 }}>
-                            {elapsedText}
-                          </span>
-                          <span>{jamRiil}</span>
-                        </div>
-                      </div>
-                      <div
-                        style={{
-                          color: '#1e293b',
-                          fontSize: '0.78rem',
-                          lineHeight: 1.4,
-                          marginTop: 3,
-                        }}
-                      >
-                        {ev.questionText || ev.detail || (ev.questionNum ? `Soal #${ev.questionNum}` : '-')}
-                      </div>
-                    </div>
-                  );
-                })
-              )}
+                          <td style={{ textAlign: 'center', color: '#64748b', fontWeight: 600 }}>
+                            {idx + 1}
+                          </td>
+                          <td style={{ color: '#4f46e5', fontWeight: 700 }}>{elapsedText}</td>
+                          <td style={{ color: '#64748b' }}>{jamRiil}</td>
+                          <td>
+                            <span
+                              style={{
+                                fontSize: '0.7rem',
+                                fontWeight: 700,
+                                padding: '3px 8px',
+                                borderRadius: 4,
+                                background: b.bg,
+                                color: b.color,
+                                display: 'inline-block',
+                              }}
+                            >
+                              {b.label}
+                            </span>
+                          </td>
+                          <td
+                            style={{
+                              color: ev.type === 'VIOLATION' || ev.type === 'DISQUALIFIED' ? '#dc2626' : '#1e293b',
+                              fontWeight: ev.type === 'VIOLATION' ? 700 : 400,
+                              lineHeight: 1.45,
+                              wordBreak: 'break-word',
+                            }}
+                          >
+                            {detailMsg}
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
             </div>
           </div>
         </div>

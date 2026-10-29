@@ -34,10 +34,13 @@ export function AdminDashboardPage() {
   const [liveSessions, setLiveSessions] = useState([]);
   const [loadingData, setLoadingData] = useState(false);
 
-  // Simplified Single-Row Filter State
+  // Filters & Sorting State
   const [searchQuery, setSearchQuery] = useState('');
   const [quizFilter, setQuizFilter] = useState('ALL');
   const [statusFilter, setStatusFilter] = useState('ALL');
+  const [gradeFilter, setGradeFilter] = useState('ALL');
+  const [violationFilter, setViolationFilter] = useState('ALL');
+  const [sortKey, setSortKey] = useState('submitted_at-desc');
 
   // Modals & Toasts
   const [answerModal, setAnswerModal] = useState(null);
@@ -200,21 +203,45 @@ export function AdminDashboardPage() {
   // Memoized Filtered Submissions
   const filteredSubmissions = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    return submissions.filter((sub) => {
+    const list = submissions.filter((sub) => {
       if (quizFilter !== 'ALL' && String(sub.quiz_id) !== String(quizFilter)) {
         return false;
       }
       if (statusFilter !== 'ALL') {
-        if (statusFilter === 'GRADED' && (sub.grade === null || sub.grade === undefined)) {
-          return false;
-        }
-        if (statusFilter === 'UNGRADED' && sub.grade !== null && sub.grade !== undefined) {
+        if (
+          statusFilter === 'COMPLETED' &&
+          sub.status !== 'COMPLETED' &&
+          sub.status !== 'SUBMITTED_MANUALLY' &&
+          sub.status !== 'SUBMITTED'
+        ) {
           return false;
         }
         if (statusFilter === 'DISQUALIFIED' && sub.status !== 'DISQUALIFIED') {
           return false;
         }
-        if (statusFilter === 'VIOLATION' && (Number(sub.violation_count) || 0) === 0) {
+        if (statusFilter === 'TIME_EXPIRED' && sub.status !== 'TIME_EXPIRED') {
+          return false;
+        }
+      }
+      if (gradeFilter !== 'ALL') {
+        const hasGrade = sub.grade !== null && sub.grade !== undefined && sub.grade !== '';
+        const gNum = hasGrade ? Number(sub.grade) : null;
+        if (gradeFilter === 'GRADED' && !hasGrade) return false;
+        if (gradeFilter === 'UNGRADED' && hasGrade) return false;
+        if (gradeFilter === 'A' && (!hasGrade || gNum < 80)) return false;
+        if (gradeFilter === 'B' && (!hasGrade || gNum < 60 || gNum >= 80)) return false;
+        if (gradeFilter === 'C' && (!hasGrade || gNum >= 60)) return false;
+      }
+      if (violationFilter !== 'ALL') {
+        const v = Number(sub.violation_count) || 0;
+        const maxV = Number(sub.max_violations) || 3;
+        if (violationFilter === 'CLEAN' && v > 0) return false;
+        if (violationFilter === 'HAS_VIOLATION' && v === 0) return false;
+        if (
+          violationFilter === 'MAX_VIOLATION' &&
+          v < maxV &&
+          sub.status !== 'DISQUALIFIED'
+        ) {
           return false;
         }
       }
@@ -225,7 +252,48 @@ export function AdminDashboardPage() {
       }
       return true;
     });
-  }, [submissions, quizFilter, statusFilter, searchQuery]);
+
+    list.sort((a, b) => {
+      switch (sortKey) {
+        case 'submitted_at-asc':
+          return new Date(a.submitted_at || 0) - new Date(b.submitted_at || 0);
+        case 'submitted_at-desc':
+          return new Date(b.submitted_at || 0) - new Date(a.submitted_at || 0);
+        case 'nama-asc':
+          return (a.nama || '').localeCompare(b.nama || '');
+        case 'nama-desc':
+          return (b.nama || '').localeCompare(a.nama || '');
+        case 'nim-asc':
+          return String(a.nim || '').localeCompare(String(b.nim || ''), undefined, {
+            numeric: true,
+          });
+        case 'nim-desc':
+          return String(b.nim || '').localeCompare(String(a.nim || ''), undefined, {
+            numeric: true,
+          });
+        case 'grade-asc':
+          return (Number(a.grade) || 0) - (Number(b.grade) || 0);
+        case 'grade-desc':
+          return (Number(b.grade) || 0) - (Number(a.grade) || 0);
+        case 'violation_count-asc':
+          return (Number(a.violation_count) || 0) - (Number(b.violation_count) || 0);
+        case 'violation_count-desc':
+          return (Number(b.violation_count) || 0) - (Number(a.violation_count) || 0);
+        default:
+          return new Date(b.submitted_at || 0) - new Date(a.submitted_at || 0);
+      }
+    });
+
+    return list;
+  }, [
+    submissions,
+    quizFilter,
+    statusFilter,
+    gradeFilter,
+    violationFilter,
+    searchQuery,
+    sortKey,
+  ]);
 
   // Memoized Filtered Live Sessions
   const filteredLiveSessions = useMemo(() => {
@@ -440,108 +508,179 @@ export function AdminDashboardPage() {
       {/* TAB 1 & 2 SHARED COMPACT FILTER BAR */}
       {(activeTab === 'SUBMISSIONS' || activeTab === 'LIVE') && (
         <div className="compact-filter-bar no-print">
-          <input
-            type="text"
-            className="filter-input"
-            placeholder="🔍 Cari nama mahasiswa atau NIM..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-          />
+          <div className="filter-row">
+            <input
+              type="text"
+              className="filter-input"
+              placeholder="🔍 Cari nama mahasiswa atau NIM..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
 
-          <select
-            className="filter-select"
-            value={quizFilter}
-            onChange={(e) => setQuizFilter(e.target.value)}
-          >
-            <option value="ALL">📚 Semua Quiz ID</option>
-            {quizList.map((q) => (
-              <option key={q.quiz_id} value={q.quiz_id}>
-                Quiz #{q.quiz_id} ({q.total_questions || 0} Soal)
-              </option>
-            ))}
-          </select>
-
-          {activeTab === 'SUBMISSIONS' && (
             <select
               className="filter-select"
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
+              value={quizFilter}
+              onChange={(e) => setQuizFilter(e.target.value)}
             >
-              <option value="ALL">📌 Semua Status</option>
-              <option value="UNGRADED">Belum Dinilai</option>
-              <option value="GRADED">Sudah Dinilai</option>
-              <option value="DISQUALIFIED">Diskualifikasi</option>
-              <option value="VIOLATION">Ada Pelanggaran (&gt;0)</option>
+              <option value="ALL">📚 Semua Quiz ID</option>
+              {quizList.map((q) => (
+                <option key={q.quiz_id} value={q.quiz_id}>
+                  Quiz #{q.quiz_id} ({q.total_questions || 0} Soal)
+                </option>
+              ))}
             </select>
-          )}
 
-          {(searchQuery || quizFilter !== 'ALL' || statusFilter !== 'ALL') && (
-            <button
-              type="button"
-              className="btn btn-outline btn-sm"
-              onClick={() => {
-                setSearchQuery('');
-                setQuizFilter('ALL');
-                setStatusFilter('ALL');
-              }}
-            >
-              ✕ Reset
-            </button>
-          )}
-
-          <div
-            style={{
-              marginLeft: 'auto',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-            }}
-          >
-            <span
-              style={{
-                fontSize: '0.78rem',
-                color: '#64748b',
-                fontWeight: 600,
-              }}
-            >
-              Rata-rata Nilai:{' '}
-              <strong style={{ color: '#0f172a' }}>{stats.avg}</strong>
-            </span>
             {activeTab === 'SUBMISSIONS' && (
               <>
-                <button
-                  type="button"
-                  className="btn btn-outline btn-sm"
-                  onClick={fetchSubmissions}
+                <select
+                  className="filter-select"
+                  value={statusFilter}
+                  onChange={(e) => setStatusFilter(e.target.value)}
                 >
-                  🔄 Refresh
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-success btn-sm"
-                  onClick={handleExportCSV}
+                  <option value="ALL">📌 Semua Status Ujian</option>
+                  <option value="COMPLETED">✅ Selesai Normal / Manual</option>
+                  <option value="DISQUALIFIED">❌ Diskualifikasi</option>
+                  <option value="TIME_EXPIRED">⏰ Waktu Habis</option>
+                </select>
+
+                <select
+                  className="filter-select"
+                  value={gradeFilter}
+                  onChange={(e) => setGradeFilter(e.target.value)}
                 >
-                  📥 Export CSV
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-outline btn-sm"
-                  onClick={() => window.print()}
+                  <option value="ALL">🎯 Semua Nilai</option>
+                  <option value="GRADED">📝 Sudah Dinilai</option>
+                  <option value="UNGRADED">⏳ Belum Dinilai</option>
+                  <option value="A">🌟 Nilai A (&ge; 80)</option>
+                  <option value="B">👍 Nilai B (60 - 79)</option>
+                  <option value="C">⚠️ Nilai C (&lt; 60)</option>
+                </select>
+
+                <select
+                  className="filter-select"
+                  value={violationFilter}
+                  onChange={(e) => setViolationFilter(e.target.value)}
                 >
-                  🖨️ Cetak
-                </button>
+                  <option value="ALL">⚠️ Semua Pelanggaran</option>
+                  <option value="CLEAN">🛡️ Bersih (0 Pelanggaran)</option>
+                  <option value="HAS_VIOLATION">🚨 Ada Pelanggaran (&gt; 0)</option>
+                  <option value="MAX_VIOLATION">🚫 Diskualifikasi (Maksimal)</option>
+                </select>
               </>
             )}
-            {activeTab === 'LIVE' && (
+
+            {(searchQuery ||
+              quizFilter !== 'ALL' ||
+              statusFilter !== 'ALL' ||
+              gradeFilter !== 'ALL' ||
+              violationFilter !== 'ALL' ||
+              sortKey !== 'submitted_at-desc') && (
               <button
                 type="button"
-                className="btn btn-outline btn-sm"
-                onClick={fetchLiveSessions}
+                className="btn btn-outline btn-sm btn-touchable"
+                onClick={() => {
+                  setSearchQuery('');
+                  setQuizFilter('ALL');
+                  setStatusFilter('ALL');
+                  setGradeFilter('ALL');
+                  setViolationFilter('ALL');
+                  setSortKey('submitted_at-desc');
+                }}
               >
-                🔄 Sync Sekarang
+                ↺ Reset
               </button>
             )}
+
+            <div
+              style={{
+                marginLeft: 'auto',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+              }}
+            >
+              {activeTab === 'SUBMISSIONS' && (
+                <>
+                  <button
+                    type="button"
+                    className="btn btn-outline btn-sm btn-touchable"
+                    onClick={fetchSubmissions}
+                  >
+                    🔄 Refresh
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-success btn-sm btn-touchable"
+                    onClick={handleExportCSV}
+                  >
+                    📥 Export CSV
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-outline btn-sm btn-touchable"
+                    onClick={() => window.print()}
+                  >
+                    🖨️ Cetak
+                  </button>
+                </>
+              )}
+              {activeTab === 'LIVE' && (
+                <button
+                  type="button"
+                  className="btn btn-outline btn-sm btn-touchable"
+                  onClick={fetchLiveSessions}
+                >
+                  🔄 Sync Sekarang
+                </button>
+              )}
+            </div>
           </div>
+
+          {/* BARIS SORTING & INFORMASI JUMLAH HASIL */}
+          {activeTab === 'SUBMISSIONS' && (
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                paddingTop: 8,
+                borderTop: '1px solid #f1f5f9',
+                fontSize: '0.78rem',
+                color: '#64748b',
+                flexWrap: 'wrap',
+                gap: 8,
+              }}
+            >
+              <div>
+                Menampilkan <strong style={{ color: '#0f172a' }}>{filteredSubmissions.length}</strong>{' '}
+                dari total <strong style={{ color: '#0f172a' }}>{submissions.length}</strong> data jawaban mahasiswa.
+                <span style={{ marginLeft: 14 }}>
+                  Rata-rata Nilai: <strong style={{ color: '#0f172a' }}>{stats.avg}</strong>
+                </span>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontWeight: 600 }}>Urutkan Berdasarkan:</span>
+                <select
+                  className="filter-select"
+                  style={{ padding: '4px 8px', fontSize: '0.78rem' }}
+                  value={sortKey}
+                  onChange={(e) => setSortKey(e.target.value)}
+                >
+                  <option value="submitted_at-desc">Waktu Submit (Terbaru)</option>
+                  <option value="submitted_at-asc">Waktu Submit (Terlama)</option>
+                  <option value="nama-asc">Nama Mahasiswa (A - Z)</option>
+                  <option value="nama-desc">Nama Mahasiswa (Z - A)</option>
+                  <option value="nim-asc">NIM (Terkecil)</option>
+                  <option value="nim-desc">NIM (Terbesar)</option>
+                  <option value="grade-desc">Nilai (Tertinggi)</option>
+                  <option value="grade-asc">Nilai (Terendah)</option>
+                  <option value="violation_count-desc">Pelanggaran (Terbanyak)</option>
+                  <option value="violation_count-asc">Pelanggaran (Tersedikit)</option>
+                </select>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -552,6 +691,7 @@ export function AdminDashboardPage() {
             <table className="data-table">
               <thead>
                 <tr>
+                  <th style={{ width: 48, textAlign: 'center' }}>No.</th>
                   <th>Mahasiswa & Quiz</th>
                   <th>Waktu Submit</th>
                   <th>Integritas / Kecurangan</th>
@@ -563,20 +703,21 @@ export function AdminDashboardPage() {
               <tbody>
                 {loadingData ? (
                   <tr>
-                    <td colSpan="6" className="empty-state">
+                    <td colSpan={role !== 'PROCTOR' ? 7 : 6} className="empty-state">
                       ⏳ Memuat data jawaban mahasiswa...
                     </td>
                   </tr>
                 ) : filteredSubmissions.length === 0 ? (
                   <tr>
-                    <td colSpan="6" className="empty-state">
+                    <td colSpan={role !== 'PROCTOR' ? 7 : 6} className="empty-state">
                       Tidak ada data pengerjaan yang sesuai filter.
                     </td>
                   </tr>
                 ) : (
-                  filteredSubmissions.map((sub) => (
+                  filteredSubmissions.map((sub, idx) => (
                     <SubmissionRow
                       key={sub.id}
+                      index={idx}
                       sub={sub}
                       role={role}
                       onSaveGrade={handleSaveGrade}
