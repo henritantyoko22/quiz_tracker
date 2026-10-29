@@ -590,7 +590,15 @@ app.get('/v1/admin/live/sessions', authenticate, requireRole('SUPERADMIN', 'PROC
       session.remainingSeconds = 0;
     }
 
-    const totalElapsed = Math.floor((Date.now() - session.startedAt) / 1000);
+    // Hitung total waktu pengerjaan:
+    // Jika sudah selesai: waktu antara startedAt sampai finishedAt
+    // Jika masih aktif: waktu antara startedAt sampai sekarang (Date.now())
+    let totalElapsed = 0;
+    if (session.finishedAt) {
+      totalElapsed = Math.max(0, Math.floor((session.finishedAt - session.startedAt) / 1000));
+    } else {
+      totalElapsed = Math.max(0, Math.floor((Date.now() - session.startedAt) / 1000));
+    }
 
     // Cek batas waktu durasi kuis:
     // Jika waktu pengerjaan sudah melebihi durasi kuis (misal 15 menit + 30 detik toleransi) atau melewati end_time,
@@ -606,14 +614,31 @@ app.get('/v1/admin/live/sessions', authenticate, requireRole('SUPERADMIN', 'PROC
       session.remainingSeconds = 0;
     }
 
+    // Hitung sisa waktu real-time
+    let remainingSeconds = session.remainingSeconds;
+    if (session.status === 'ACTIVE') {
+      const calculatedRemaining = Math.max(0, maxSeconds - totalElapsed);
+      remainingSeconds = (remainingSeconds !== null && remainingSeconds !== undefined)
+        ? Math.min(remainingSeconds, calculatedRemaining)
+        : calculatedRemaining;
+    } else {
+      remainingSeconds = 0;
+    }
+
+    const payload = {
+      ...session,
+      totalElapsedSeconds: totalElapsed,
+      remainingSeconds: remainingSeconds
+    };
+
     // Jika tidak minta all, HANYA masukkan yang benar-benar masih ACTIVE
     if (!showAll) {
       if (session.status === 'ACTIVE') {
-        sessions.push({ ...session, totalElapsedSeconds: totalElapsed });
+        sessions.push(payload);
       }
     } else {
       if (session.lastHeartbeat >= cutoff || session.status === 'ACTIVE') {
-        sessions.push({ ...session, totalElapsedSeconds: totalElapsed });
+        sessions.push(payload);
       }
     }
   }
@@ -625,7 +650,7 @@ app.get('/v1/admin/live/sessions', authenticate, requireRole('SUPERADMIN', 'PROC
 });
 
 // Ambil detail satu sesi live mahasiswa
-app.get('/v1/admin/live/sessions/:nim/:quizId', authenticate, requireRole('SUPERADMIN', 'PROCTOR'), (req, res) => {
+app.get('/v1/admin/live/sessions/:nim/:quizId', authenticate, requireRole('SUPERADMIN', 'PROCTOR'), async (req, res) => {
   const key = getLiveSessionKey(req.params.nim, req.params.quizId);
   const session = liveStudentSessions.get(key);
 
@@ -633,8 +658,59 @@ app.get('/v1/admin/live/sessions/:nim/:quizId', authenticate, requireRole('SUPER
     return res.status(404).json({ status: 'error', message: 'Sesi tidak ditemukan atau sudah kedaluwarsa.' });
   }
 
-  const totalElapsed = Math.floor((Date.now() - session.startedAt) / 1000);
-  res.json({ status: 'success', data: { ...session, totalElapsedSeconds: totalElapsed } });
+  // Cek apakah ada record resmi submit di DB
+  try {
+    const subRes = await db.query(
+      'SELECT status FROM quiz_submissions WHERE nim = $1 AND quiz_id = $2',
+      [req.params.nim, req.params.quizId]
+    );
+    if (subRes.rows.length > 0) {
+      session.status = subRes.rows[0].status || 'SUBMITTED';
+      if (!session.finishedAt) {
+        session.finishedAt = Date.now();
+        session.finishedAtISO = new Date().toISOString();
+      }
+      session.remainingSeconds = 0;
+    }
+  } catch (e) {}
+
+  // Ambil durasi kuis dari quiz_settings
+  let maxSeconds = 3600;
+  try {
+    const setRes = await db.query(
+      'SELECT duration_minutes, end_time FROM quiz_settings WHERE quiz_id = $1',
+      [req.params.quizId]
+    );
+    if (setRes.rows.length > 0) {
+      maxSeconds = (parseInt(setRes.rows[0].duration_minutes) || 60) * 60;
+    }
+  } catch (e) {}
+
+  let totalElapsed = 0;
+  if (session.finishedAt) {
+    totalElapsed = Math.max(0, Math.floor((session.finishedAt - session.startedAt) / 1000));
+  } else {
+    totalElapsed = Math.max(0, Math.floor((Date.now() - session.startedAt) / 1000));
+  }
+
+  let remainingSeconds = session.remainingSeconds;
+  if (session.status === 'ACTIVE') {
+    const calculatedRemaining = Math.max(0, maxSeconds - totalElapsed);
+    remainingSeconds = (remainingSeconds !== null && remainingSeconds !== undefined)
+      ? Math.min(remainingSeconds, calculatedRemaining)
+      : calculatedRemaining;
+  } else {
+    remainingSeconds = 0;
+  }
+
+  res.json({
+    status: 'success',
+    data: {
+      ...session,
+      totalElapsedSeconds: totalElapsed,
+      remainingSeconds: remainingSeconds
+    }
+  });
 });
 
 // Bersihkan sesi lama secara manual (SUPERADMIN)

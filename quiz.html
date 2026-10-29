@@ -241,6 +241,21 @@
       border-radius: 12px;
       transition: all 0.2s ease;
     }
+
+    /* Efek Touchable Opacity untuk Tombol Aksi */
+    .btn-touchable {
+      transition: opacity 0.15s ease, transform 0.1s ease, box-shadow 0.2s ease;
+      cursor: pointer;
+      user-select: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .btn-touchable:hover {
+      opacity: 0.92;
+    }
+    .btn-touchable:active {
+      opacity: 0.65;
+      transform: scale(0.985);
+    }
   </style>
 </head>
 <body>
@@ -377,8 +392,8 @@
         <!-- Kontainer Soal-Soal Dinamis -->
         <div id="questions-list"></div>
 
-        <button type="submit" id="btn-submit" class="btn btn-success w-100 fw-bold py-3 mt-4 shadow fs-5">
-          🚀 Selesaikan & Kirim Jawaban Ujian
+        <button type="submit" id="btn-submit" class="btn btn-success btn-touchable w-100 fw-bold py-3 mt-4 shadow fs-5">
+          Selesaikan & Kirim Jawaban Ujian
         </button>
       </form>
     </div>
@@ -1418,9 +1433,14 @@
     essayForm.addEventListener('submit', async (e) => {
       e.preventDefault();
       if (!isLoggedIn || isSubmitted) return;
-      
-      const confirmSubmit = confirm('Apakah Anda yakin ingin menyelesaikan ujian dan mengirim jawaban sekarang?');
-      if (!confirmSubmit) return;
+
+      // Sentuhan Touchable Opacity langsung tanpa popup alert/confirm browser
+      const submitBtn = document.getElementById('btn-submit');
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.style.opacity = '0.65';
+        submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Menyiapkan & Mengirim Jawaban...';
+      }
 
       isSubmitted = true;
       if (timerInterval) clearInterval(timerInterval);

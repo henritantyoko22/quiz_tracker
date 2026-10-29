@@ -1567,12 +1567,25 @@
       }
     }
 
-    // Tampilkan Modal Detail Timeline Pengerjaan Mahasiswa
+    // Tampilkan Modal Detail Timeline Pengerjaan Mahasiswa (Auto-refresh up-to-date)
+    let liveDetailPollingInterval = null;
+    let currentDetailTarget = null;
+
+    // Bersihkan interval polling saat modal detail ditutup
+    document.getElementById('liveDetailModal').addEventListener('hidden.bs.modal', () => {
+      if (liveDetailPollingInterval) {
+        clearInterval(liveDetailPollingInterval);
+        liveDetailPollingInterval = null;
+      }
+      currentDetailTarget = null;
+    });
+
     async function viewLiveDetailModal(nimEncoded, quizIdEncoded) {
       const nim = decodeURIComponent(nimEncoded);
       const quizId = decodeURIComponent(quizIdEncoded);
+      currentDetailTarget = { nim, quizId };
 
-      // Tampilkan Modal dengan state loading
+      // Tampilkan Modal dengan state loading awal
       document.getElementById('live-detail-nama').textContent = 'Memuat...';
       document.getElementById('live-detail-nim').textContent = nim;
       document.getElementById('live-detail-quiz').textContent = quizId;
@@ -1583,18 +1596,32 @@
 
       liveDetailModal.show();
 
+      // Ambil data pertama kali
+      await fetchAndRenderLiveDetail(nim, quizId, true);
+
+      // Jalankan interval auto-refresh setiap 2.5 detik agar TOTAL WAKTU & SISA WAKTU selalu up-to-date
+      if (liveDetailPollingInterval) clearInterval(liveDetailPollingInterval);
+      liveDetailPollingInterval = setInterval(() => {
+        if (currentDetailTarget) {
+          fetchAndRenderLiveDetail(currentDetailTarget.nim, currentDetailTarget.quizId, false);
+        }
+      }, 2500);
+    }
+
+    async function fetchAndRenderLiveDetail(nim, quizId, isFirstLoad = false) {
       try {
         const res = await fetch(`${API_BASE}/v1/admin/live/sessions/${encodeURIComponent(nim)}/${encodeURIComponent(quizId)}`, {
           headers: getAuthHeaders()
         });
 
         if (!res.ok) {
-          document.getElementById('live-detail-nama').textContent = 'Data sesi tidak ditemukan.';
+          if (isFirstLoad) document.getElementById('live-detail-nama').textContent = 'Data sesi tidak ditemukan.';
           return;
         }
 
         const json = await res.json();
         const s = json.data;
+        if (!s) return;
 
         // Info Kartu Peserta
         document.getElementById('live-detail-nama').textContent = s.nama || '-';
@@ -1611,9 +1638,16 @@
         }
         document.getElementById('live-detail-status').innerHTML = statusHtml;
 
-        const totalStr = formatDuration(s.totalElapsedSeconds);
-        const remStr = s.remainingSeconds !== null ? formatDuration(s.remainingSeconds) : '-';
-        document.getElementById('live-detail-time').textContent = `${totalStr} (Sisa: ${remStr})`;
+        const totalStr = formatDuration(s.totalElapsedSeconds || 0);
+        const remStr = (s.remainingSeconds !== null && s.remainingSeconds !== undefined) 
+          ? formatDuration(s.remainingSeconds) 
+          : '-';
+        
+        document.getElementById('live-detail-time').innerHTML = `
+          <span class="text-primary fw-bold">${totalStr}</span> 
+          <span class="text-muted fw-normal">| Sisa:</span> 
+          <span class="text-danger fw-bold">${remStr}</span>
+        `;
 
         // Section 1: Breakdown Waktu Tiap Soal
         const breakdownContainer = document.getElementById('live-detail-question-breakdown');
@@ -1703,7 +1737,9 @@
           }).join('');
         }
       } catch (err) {
-        document.getElementById('live-detail-nama').textContent = 'Gagal memuat: ' + err.message;
+        if (isFirstLoad) {
+          document.getElementById('live-detail-nama').textContent = 'Gagal memuat: ' + err.message;
+        }
       }
     }
 
