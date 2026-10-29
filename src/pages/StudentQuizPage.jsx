@@ -268,6 +268,9 @@ export function StudentQuizPage() {
         status: finalStatus,
         violationCount: countsRef.current.total,
         maxViolations: countsRef.current.max,
+        questionTimings: questionTimingsRef.current,
+        activityLog: activityLogRef.current,
+        durationSeconds,
       };
 
       // Also notify live session immediately

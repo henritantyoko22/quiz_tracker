@@ -7,6 +7,7 @@ export const SubmissionRow = memo(function SubmissionRow({
   onSaveGrade,
   onOpenAnswerModal,
   onOpenViolationModal,
+  onOpenTimingModal,
 }) {
   const [grade, setGrade] = useState(
     sub.grade !== null && sub.grade !== undefined ? sub.grade : ''
@@ -74,15 +75,24 @@ export const SubmissionRow = memo(function SubmissionRow({
               {sub.violation_summary}
             </span>
           )}
-          {vCount > 0 && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 4 }}>
+            {vCount > 0 && (
+              <button
+                type="button"
+                className="btn btn-outline btn-xs btn-touchable"
+                onClick={() => onOpenViolationModal(sub)}
+              >
+                🚨 Log Pelanggaran
+              </button>
+            )}
             <button
               type="button"
-              className="btn btn-outline btn-xs"
-              onClick={() => onOpenViolationModal(sub)}
+              className="btn btn-outline btn-xs btn-touchable"
+              onClick={() => onOpenTimingModal(sub)}
             >
-              🔍 Detail Log
+              ⏱️ Log Waktu Soal
             </button>
-          )}
+          </div>
         </div>
       </td>
       <td style={{ maxWidth: 320 }}>

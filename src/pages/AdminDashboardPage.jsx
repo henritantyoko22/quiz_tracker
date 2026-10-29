@@ -584,6 +584,20 @@ export function AdminDashboardPage() {
                         setAnswerModal({ sub: s, entries })
                       }
                       onOpenViolationModal={(s) => setViolationModal(s)}
+                      onOpenTimingModal={(s) =>
+                        setLiveDetailModal({
+                          nama: s.nama,
+                          studentName: s.nama,
+                          nim: s.nim,
+                          quizId: s.quiz_id,
+                          status: s.status || 'SUBMITTED',
+                          questionTimings: s.question_timings || [],
+                          activityLog: s.activity_log || [],
+                          totalElapsedSeconds: s.duration_seconds || 0,
+                          remainingSeconds: 0,
+                          violationCount: s.violation_count || 0,
+                        })
+                      }
                     />
                   ))
                 )}

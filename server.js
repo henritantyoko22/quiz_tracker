@@ -189,6 +189,18 @@ async function initDbTables() {
       ALTER TABLE quiz_submissions 
       ADD COLUMN IF NOT EXISTS max_violations INT DEFAULT 3;
     `);
+    await db.query(`
+      ALTER TABLE quiz_submissions 
+      ADD COLUMN IF NOT EXISTS question_timings JSONB;
+    `);
+    await db.query(`
+      ALTER TABLE quiz_submissions 
+      ADD COLUMN IF NOT EXISTS activity_log JSONB;
+    `);
+    await db.query(`
+      ALTER TABLE quiz_submissions 
+      ADD COLUMN IF NOT EXISTS duration_seconds INT DEFAULT 0;
+    `);
     console.log('✅ Struktur database terverifikasi lengkap.');
   } catch (err) {
     console.warn('ℹ️ Inisialisasi tabel/kolom DB:', err.message);
@@ -381,9 +393,9 @@ app.get('/v1/quiz/questions/:quizId', async (req, res) => {
   }
 });
 
-// Menyimpan jawaban kuis peserta (disertai laporan jumlah pelanggaran)
+// Menyimpan jawaban kuis peserta (disertai laporan jumlah pelanggaran & telemetry)
 app.post('/v1/quiz/submit', async (req, res) => {
-  const { userId, nim, quizId, answers, status, violationCount, maxViolations } = req.body;
+  const { userId, nim, quizId, answers, status, violationCount, maxViolations, questionTimings, activityLog, durationSeconds } = req.body;
 
   if (!userId || !nim || userId.trim() === '' || nim.trim() === '' || userId === '-' || nim === '-') {
     return res.status(400).json({
@@ -394,23 +406,35 @@ app.post('/v1/quiz/submit', async (req, res) => {
 
   const vCount = parseInt(violationCount) >= 0 ? parseInt(violationCount) : 0;
   const maxV = parseInt(maxViolations) > 0 ? parseInt(maxViolations) : 3;
+  const durSec = parseInt(durationSeconds) >= 0 ? parseInt(durationSeconds) : 0;
+  const qTimingsJson = questionTimings ? JSON.stringify(questionTimings) : null;
+  const actLogJson = activityLog ? JSON.stringify(activityLog) : null;
 
   try {
     let result;
     try {
       result = await db.query(
-        `INSERT INTO quiz_submissions (user_id, nim, quiz_id, answers, status, violation_count, max_violations, submitted_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+        `INSERT INTO quiz_submissions (user_id, nim, quiz_id, answers, status, violation_count, max_violations, question_timings, activity_log, duration_seconds, submitted_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
          RETURNING *`,
-        [userId, nim, quizId, JSON.stringify(answers), status || 'COMPLETED', vCount, maxV]
+        [userId, nim, quizId, JSON.stringify(answers), status || 'COMPLETED', vCount, maxV, qTimingsJson, actLogJson, durSec]
       );
     } catch (insertColErr) {
-      result = await db.query(
-        `INSERT INTO quiz_submissions (user_id, nim, quiz_id, answers, status, submitted_at)
-         VALUES ($1, $2, $3, $4, $5, NOW())
-         RETURNING *`,
-        [userId, nim, quizId, JSON.stringify(answers), status || 'COMPLETED']
-      );
+      try {
+        result = await db.query(
+          `INSERT INTO quiz_submissions (user_id, nim, quiz_id, answers, status, violation_count, max_violations, submitted_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+           RETURNING *`,
+          [userId, nim, quizId, JSON.stringify(answers), status || 'COMPLETED', vCount, maxV]
+        );
+      } catch (insertOldErr) {
+        result = await db.query(
+          `INSERT INTO quiz_submissions (user_id, nim, quiz_id, answers, status, submitted_at)
+           VALUES ($1, $2, $3, $4, $5, NOW())
+           RETURNING *`,
+          [userId, nim, quizId, JSON.stringify(answers), status || 'COMPLETED']
+        );
+      }
     }
 
     // Update live session status ke SUBMITTED atau DISQUALIFIED
@@ -424,15 +448,18 @@ app.post('/v1/quiz/submit', async (req, res) => {
         nama: userId || nim,
         nim: nim.trim(),
         quizId: quizId.trim(),
-        startedAt: nowTs - 60000,
-        startedAtISO: new Date(nowTs - 60000).toISOString(),
+        startedAt: nowTs - (durSec ? durSec * 1000 : 60000),
+        startedAtISO: new Date(nowTs - (durSec ? durSec * 1000 : 60000)).toISOString(),
         currentQuestionIndex: 0,
         currentQuestionText: 'Selesai',
-        questionTimings: [],
-        activityLog: [],
+        questionTimings: questionTimings || [],
+        activityLog: activityLog || [],
         violationCount: vCount,
         remainingSeconds: 0
       };
+    } else {
+      if (questionTimings) liveSession.questionTimings = questionTimings;
+      if (activityLog) liveSession.activityLog = activityLog;
     }
     liveSession.status = finalLiveStatus;
     liveSession.finishedAt = nowTs;
@@ -673,30 +700,66 @@ app.get('/v1/admin/live/sessions', authenticate, requireRole('SUPERADMIN', 'PROC
   res.json({ status: 'success', data: sessions, total: sessions.length });
 });
 
-// Ambil detail satu sesi live mahasiswa
+// Ambil detail satu sesi live mahasiswa (atau fallback dari database jika sesi memori sudah selesai/restart)
 app.get('/v1/admin/live/sessions/:nim/:quizId', authenticate, requireRole('SUPERADMIN', 'PROCTOR'), async (req, res) => {
   const key = getLiveSessionKey(req.params.nim, req.params.quizId);
-  const session = liveStudentSessions.get(key);
+  let session = liveStudentSessions.get(key);
 
-  if (!session) {
-    return res.status(404).json({ status: 'error', message: 'Sesi tidak ditemukan atau sudah kedaluwarsa.' });
-  }
-
-  // Cek apakah ada record resmi submit di DB
+  // Ambil record dari quiz_submissions database
+  let dbRow = null;
   try {
     const subRes = await db.query(
-      'SELECT status FROM quiz_submissions WHERE nim = $1 AND quiz_id = $2',
+      `SELECT user_id, nim, quiz_id, status, submitted_at, question_timings, activity_log, duration_seconds, violation_count 
+       FROM quiz_submissions 
+       WHERE nim = $1 AND quiz_id = $2 
+       ORDER BY submitted_at DESC LIMIT 1`,
       [req.params.nim, req.params.quizId]
     );
     if (subRes.rows.length > 0) {
-      session.status = subRes.rows[0].status || 'SUBMITTED';
-      if (!session.finishedAt) {
-        session.finishedAt = Date.now();
-        session.finishedAtISO = new Date().toISOString();
-      }
-      session.remainingSeconds = 0;
+      dbRow = subRes.rows[0];
     }
   } catch (e) {}
+
+  if (!session && !dbRow) {
+    return res.status(404).json({ status: 'error', message: 'Sesi tidak ditemukan atau sudah kedaluwarsa.' });
+  }
+
+  // Jika sesi in-memory hilang (misal serverless restart setelah submit), recover dari dbRow
+  if (!session && dbRow) {
+    const durSec = dbRow.duration_seconds || 0;
+    const subTs = dbRow.submitted_at ? new Date(dbRow.submitted_at).getTime() : Date.now();
+    session = {
+      key,
+      nama: dbRow.user_id || dbRow.nim,
+      nim: dbRow.nim,
+      quizId: dbRow.quiz_id,
+      startedAt: subTs - durSec * 1000,
+      startedAtISO: new Date(subTs - durSec * 1000).toISOString(),
+      finishedAt: subTs,
+      finishedAtISO: new Date(subTs).toISOString(),
+      currentQuestionIndex: 0,
+      currentQuestionText: 'Selesai',
+      questionTimings: dbRow.question_timings || [],
+      activityLog: dbRow.activity_log || [],
+      violationCount: dbRow.violation_count || 0,
+      remainingSeconds: 0,
+      status: dbRow.status || 'SUBMITTED',
+      totalElapsedSeconds: durSec,
+    };
+  } else if (session && dbRow) {
+    session.status = dbRow.status || 'SUBMITTED';
+    if (!session.finishedAt) {
+      session.finishedAt = dbRow.submitted_at ? new Date(dbRow.submitted_at).getTime() : Date.now();
+      session.finishedAtISO = new Date(session.finishedAt).toISOString();
+    }
+    session.remainingSeconds = 0;
+    if ((!session.questionTimings || session.questionTimings.length === 0) && dbRow.question_timings) {
+      session.questionTimings = dbRow.question_timings;
+    }
+    if ((!session.activityLog || session.activityLog.length === 0) && dbRow.activity_log) {
+      session.activityLog = dbRow.activity_log;
+    }
+  }
 
   // Ambil durasi kuis dari quiz_settings
   let maxSeconds = 3600;
@@ -710,10 +773,10 @@ app.get('/v1/admin/live/sessions/:nim/:quizId', authenticate, requireRole('SUPER
     }
   } catch (e) {}
 
-  let totalElapsed = 0;
-  if (session.finishedAt) {
+  let totalElapsed = session.totalElapsedSeconds || 0;
+  if (session.finishedAt && session.startedAt) {
     totalElapsed = Math.max(0, Math.floor((session.finishedAt - session.startedAt) / 1000));
-  } else {
+  } else if (session.startedAt) {
     totalElapsed = Math.max(0, Math.floor((Date.now() - session.startedAt) / 1000));
   }
 
@@ -914,6 +977,9 @@ app.get('/v1/admin/submissions', authenticate, async (req, res) => {
         s.grade, 
         s.feedback, 
         s.submitted_at,
+        s.question_timings,
+        s.activity_log,
+        COALESCE(s.duration_seconds, 0) AS duration_seconds,
         GREATEST(COALESCE(s.violation_count, 0), COALESCE(v.total_violations, 0)) AS violation_count,
         COALESCE(s.max_violations, 3) AS max_violations,
         COALESCE(v.violation_breakdown, '-') AS violation_summary
@@ -936,13 +1002,24 @@ app.get('/v1/admin/submissions', authenticate, async (req, res) => {
     try {
       const fallback = await db.query(
         `SELECT id, user_id AS nama, nim, quiz_id, answers, status, grade, feedback, submitted_at,
+                question_timings, activity_log, COALESCE(duration_seconds, 0) AS duration_seconds,
                 0 AS violation_count, 3 AS max_violations, '-' AS violation_summary 
          FROM quiz_submissions 
          ORDER BY submitted_at DESC`
       );
       res.json({ status: 'success', data: fallback.rows });
     } catch (fallbackErr) {
-      res.status(500).json({ status: 'error', message: err.message });
+      try {
+        const minimal = await db.query(
+          `SELECT id, user_id AS nama, nim, quiz_id, answers, status, grade, feedback, submitted_at,
+                  0 AS violation_count, 3 AS max_violations, '-' AS violation_summary 
+           FROM quiz_submissions 
+           ORDER BY submitted_at DESC`
+        );
+        res.json({ status: 'success', data: minimal.rows });
+      } catch (minErr) {
+        res.status(500).json({ status: 'error', message: err.message });
+      }
     }
   }
 });
