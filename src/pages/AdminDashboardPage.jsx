@@ -131,7 +131,7 @@ export function AdminDashboardPage() {
   const fetchLiveSessions = useCallback(async () => {
     if (!token || (role !== 'SUPERADMIN' && role !== 'PROCTOR')) return;
     try {
-      const res = await fetch(`${API_BASE}/v1/admin/live/sessions?all=true`, {
+      const res = await fetch(`${API_BASE}/v1/admin/live/sessions`, {
         headers: getAuthHeaders(token),
       });
       if (res.status === 401) {
@@ -256,6 +256,7 @@ export function AdminDashboardPage() {
             graded.length
           ).toFixed(1)
         : '-';
+    // Hanya hitung mahasiswa yang statusnya ACTIVE dan belum diskualifikasi/selesai
     const activeOnline = liveSessions.filter(
       (s) => s.status === 'ACTIVE'
     ).length;

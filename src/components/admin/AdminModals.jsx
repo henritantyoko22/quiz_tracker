@@ -20,7 +20,14 @@ export function AnswerReaderModal({ modalData, onClose }) {
                 : '-'}
             </div>
           </div>
-          <button type="button" className="btn btn-outline btn-sm" onClick={onClose}>
+          <button
+            type="button"
+            className="btn btn-outline btn-sm btn-touchable"
+            onClick={(e) => {
+              e.stopPropagation();
+              onClose();
+            }}
+          >
             ✕ Tutup
           </button>
         </div>
@@ -115,7 +122,14 @@ export function ViolationLogModal({ sub, token, onClose }) {
               Total Pelanggaran: {sub.violation_count || 0} / {sub.max_violations || 3}
             </div>
           </div>
-          <button type="button" className="btn btn-outline btn-sm" onClick={onClose}>
+          <button
+            type="button"
+            className="btn btn-outline btn-sm btn-touchable"
+            onClick={(e) => {
+              e.stopPropagation();
+              onClose();
+            }}
+          >
             ✕ Tutup
           </button>
         </div>
@@ -214,7 +228,14 @@ export function LiveDetailModal({ targetSession, token, onClose }) {
               Quiz #{detail.quizId} • Auto-sync aktif (2.5s)
             </div>
           </div>
-          <button type="button" className="btn btn-outline btn-sm" onClick={onClose}>
+          <button
+            type="button"
+            className="btn btn-outline btn-sm btn-touchable"
+            onClick={(e) => {
+              e.stopPropagation();
+              onClose();
+            }}
+          >
             ✕ Tutup
           </button>
         </div>

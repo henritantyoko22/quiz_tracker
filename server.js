@@ -605,7 +605,8 @@ app.get('/v1/admin/live/sessions', authenticate, requireRole('SUPERADMIN', 'PROC
 
     // Jika di database sudah ada record submit, paksa status sesi live jadi SUBMITTED!
     if (dbSubmittedMap.has(key)) {
-      session.status = dbSubmittedMap.get(key);
+      const dbStatus = dbSubmittedMap.get(key);
+      session.status = dbStatus || 'SUBMITTED';
       if (!session.finishedAt) {
         session.finishedAt = Date.now();
         session.finishedAtISO = new Date().toISOString();
