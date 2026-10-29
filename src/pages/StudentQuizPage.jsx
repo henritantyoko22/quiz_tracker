@@ -654,8 +654,10 @@ export function StudentQuizPage() {
 
               <button
                 type="submit"
-                className="btn-touchable"
+                className="btn btn-touchable"
                 disabled={!scheduleState.valid || scheduleState.loading}
+                style={{ justifyContent: 'center', padding: '11px', marginTop: 6 }}
+                
               >
                 {scheduleState.loading
                   ? 'Memeriksa Jadwal & Soal...'
