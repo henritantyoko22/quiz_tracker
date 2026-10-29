@@ -357,7 +357,7 @@ export function AdminDashboardPage() {
               disabled={loggingIn}
               style={{ justifyContent: 'center', padding: '11px', marginTop: 6 }}
             >
-              {loggingIn ? '⏳ Memverifikasi...' : '🔐 Masuk ke Dashboard'}
+              {loggingIn ? '⏳ Memverifikasi...' : 'Masuk ke Dashboard'}
             </button>
           </form>
         </div>

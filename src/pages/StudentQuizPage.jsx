@@ -654,9 +654,9 @@ export function StudentQuizPage() {
 
               <button
                 type="submit"
-                className="btn btn-touchable"
+                className="btn btn-touchable btn-primary"
                 disabled={!scheduleState.valid || scheduleState.loading}
-                style={{ justifyContent: 'center', padding: '11px', marginTop: 6 }}
+                style={{ justifyContent: 'center', padding: '11px', marginTop: 6,  }}
                 
               >
                 {scheduleState.loading
