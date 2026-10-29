@@ -11,7 +11,6 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 app.use('/src', express.static(path.join(__dirname, 'src')));
-app.use(express.static(path.join(__dirname, 'public')));
 
 // -------------------------------------------------------------
 // HELPER PASSWORD HASHING (PBKDF2 + SALT)
@@ -1021,50 +1020,93 @@ app.delete('/v1/admin/questions/:id', authenticate, requireRole('SUPERADMIN', 'D
   }
 });
 
-// Dynamic React Modular Bundle (menggabungkan struktur src/ tanpa perlu bundler eksternal)
-const REACT_MODULE_FILES = [
-  'src/services/api.js',
-  'src/components/admin/SubmissionRow.jsx',
-  'src/components/admin/LiveSessionRow.jsx',
-  'src/components/admin/AdminModals.jsx',
-  'src/components/admin/UnifiedQuizManager.jsx',
-  'src/components/admin/UserManager.jsx',
-  'src/components/quiz/StickyExamHeader.jsx',
-  'src/components/quiz/QuestionCard.jsx',
-  'src/pages/AdminDashboardPage.jsx',
-  'src/pages/StudentQuizPage.jsx',
-  'src/App.jsx',
-  'src/main.jsx'
-];
+// Dynamic React Modular Bundle (menggunakan literal path.join agar @vercel/nft otomatis mem-bundle seluruh file src/)
+function loadReactModulesRaw() {
+  return [
+    { name: 'src/services/api.js', code: fs.readFileSync(path.join(__dirname, 'src/services/api.js'), 'utf8') },
+    { name: 'src/components/admin/SubmissionRow.jsx', code: fs.readFileSync(path.join(__dirname, 'src/components/admin/SubmissionRow.jsx'), 'utf8') },
+    { name: 'src/components/admin/LiveSessionRow.jsx', code: fs.readFileSync(path.join(__dirname, 'src/components/admin/LiveSessionRow.jsx'), 'utf8') },
+    { name: 'src/components/admin/AdminModals.jsx', code: fs.readFileSync(path.join(__dirname, 'src/components/admin/AdminModals.jsx'), 'utf8') },
+    { name: 'src/components/admin/UnifiedQuizManager.jsx', code: fs.readFileSync(path.join(__dirname, 'src/components/admin/UnifiedQuizManager.jsx'), 'utf8') },
+    { name: 'src/components/admin/UserManager.jsx', code: fs.readFileSync(path.join(__dirname, 'src/components/admin/UserManager.jsx'), 'utf8') },
+    { name: 'src/components/quiz/StickyExamHeader.jsx', code: fs.readFileSync(path.join(__dirname, 'src/components/quiz/StickyExamHeader.jsx'), 'utf8') },
+    { name: 'src/components/quiz/QuestionCard.jsx', code: fs.readFileSync(path.join(__dirname, 'src/components/quiz/QuestionCard.jsx'), 'utf8') },
+    { name: 'src/pages/AdminDashboardPage.jsx', code: fs.readFileSync(path.join(__dirname, 'src/pages/AdminDashboardPage.jsx'), 'utf8') },
+    { name: 'src/pages/StudentQuizPage.jsx', code: fs.readFileSync(path.join(__dirname, 'src/pages/StudentQuizPage.jsx'), 'utf8') },
+    { name: 'src/App.jsx', code: fs.readFileSync(path.join(__dirname, 'src/App.jsx'), 'utf8') },
+    { name: 'src/main.jsx', code: fs.readFileSync(path.join(__dirname, 'src/main.jsx'), 'utf8') }
+  ];
+}
+
+function buildReactBundleCode() {
+  const chunks = [
+    'const { useState, useEffect, useMemo, useCallback, useRef, memo } = React;'
+  ];
+  for (const mod of loadReactModulesRaw()) {
+    const transformed = mod.code
+      .replace(/^\s*import\s+[\s\S]*?from\s+['"][^'"]+['"];?\s*$/gm, '')
+      .replace(/^\s*export\s+default\s+/gm, '')
+      .replace(/^\s*export\s+(const|function|let|var|class)\s+/gm, '$1 ');
+    chunks.push(`\n// --- MODULE: ${mod.name} ---\n${transformed}`);
+  }
+  return chunks.join('\n');
+}
 
 app.get('/bundle.jsx', (req, res) => {
   try {
-    const chunks = [
-      'const { useState, useEffect, useMemo, useCallback, useRef, memo } = React;'
-    ];
-    for (const relPath of REACT_MODULE_FILES) {
-      const fullPath = path.join(__dirname, relPath);
-      const raw = fs.readFileSync(fullPath, 'utf8');
-      // Strip ES module import lines & export keywords so Babel compiles in shared scope
-      const transformed = raw
-        .replace(/^\s*import\s+[\s\S]*?from\s+['"][^'"]+['"];?\s*$/gm, '')
-        .replace(/^\s*export\s+default\s+/gm, '')
-        .replace(/^\s*export\s+(const|function|let|var|class)\s+/gm, '$1 ');
-      chunks.push(`\n// --- MODULE: ${relPath} ---\n${transformed}`);
-    }
     res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
-    res.send(chunks.join('\n'));
+    res.send(buildReactBundleCode());
   } catch (err) {
     res.status(500).send(`console.error("Failed to build React bundle:", ${JSON.stringify(err.message)});`);
   }
 });
 
-// Routing Halaman SPA React.js
-const sendReactApp = (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html'));
+// Routing Halaman SPA React.js (inlined CSS & JSX dari src/ agar 100% langsung tampil di Vercel tanpa kendala path static)
+const sendReactApp = (req, res) => {
+  try {
+    const cssContent = fs.readFileSync(path.join(__dirname, 'src/styles/app.css'), 'utf8');
+    const jsxBundle = buildReactBundleCode();
+    const html = `<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Quiz Tracker Proctoring System (React.js)</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet" />
+  <style>${cssContent}</style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <!-- React 18 Production UMD & Babel JSX Runtime -->
+  <script src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js" crossorigin></script>
+  <script src="https://cdn.jsdelivr.net/npm/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.24.7/babel.min.js" crossorigin></script>
+
+  <!-- Bundled Modular React Code from /src/**/*.jsx -->
+  <script type="text/babel" data-presets="env,react">
+${jsxBundle}
+  </script>
+</body>
+</html>`;
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.status(200).send(html);
+  } catch (err) {
+    res.status(500).send(`<pre>Gagal memuat aplikasi React: ${err.message}</pre>`);
+  }
+};
+
 app.get('/', sendReactApp);
 app.get('/quiz', sendReactApp);
+app.get('/quiz.html', sendReactApp);
 app.get('/admin', sendReactApp);
+app.get('/admin.html', sendReactApp);
 app.get('/admin-dashboard', sendReactApp);
+app.get('/admin-dashboard.html', sendReactApp);
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server API berjalan di port ${PORT}`));
+if (require.main === module) {
+  app.listen(PORT, () => console.log(`Server API berjalan di port ${PORT}`));
+}
+
+module.exports = app;
