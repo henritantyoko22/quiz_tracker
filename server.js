@@ -1084,7 +1084,7 @@ const sendReactApp = (req, res) => {
   <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.24.7/babel.min.js" crossorigin></script>
 
   <!-- Bundled Modular React Code from /src/**/*.jsx -->
-  <script type="text/babel" data-presets="env,react">
+  <script type="text/babel" data-presets="react">
 ${jsxBundle}
   </script>
 </body>
