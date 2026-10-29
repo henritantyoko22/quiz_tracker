@@ -174,8 +174,23 @@ export function ViolationLogModal({ sub, token, onClose }) {
 export function LiveDetailModal({ targetSession, token, onClose }) {
   const [detail, setDetail] = useState(targetSession);
 
+  // Close on Escape key
   useEffect(() => {
     if (!targetSession) return;
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [targetSession, onClose]);
+
+  useEffect(() => {
+    if (!targetSession) {
+      setDetail(null);
+      return;
+    }
     setDetail(targetSession);
 
     let active = true;
@@ -202,27 +217,80 @@ export function LiveDetailModal({ targetSession, token, onClose }) {
     };
   }, [targetSession, token]);
 
-  if (!detail) return null;
+  if (!targetSession || !detail) return null;
 
-  const timingsArr = Array.isArray(detail.questionTimings)
-    ? detail.questionTimings
-    : [];
+  const parseArray = (val) => {
+    if (!val) return [];
+    if (Array.isArray(val)) return val;
+    if (typeof val === 'string') {
+      try {
+        const parsed = JSON.parse(val);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch (_) {
+        return [];
+      }
+    }
+    return [];
+  };
+
+  const timingsArr = parseArray(detail.questionTimings);
   const maxQSec = Math.max(
     1,
     ...timingsArr.map((t) => Number(t.totalSeconds) || 0)
   );
-  const events = Array.isArray(detail.activityLog)
-    ? [...detail.activityLog].reverse()
-    : [];
+
+  const rawEvents = parseArray(detail.activityLog);
+  // Tampilkan timeline kronologis terbalik (terbaru di atas)
+  const events = [...rawEvents].reverse();
   const currentQNum = (Number(detail.currentQuestionIndex) || 0) + 1;
 
+  const getBadgeInfo = (type) => {
+    switch (type) {
+      case 'SESSION_START':
+      case 'START':
+        return { label: '🟢 Mulai Ujian', bg: '#dcfce7', color: '#166534' };
+      case 'QUESTION_FOCUS':
+        return { label: '🔵 Buka Soal', bg: '#e0e7ff', color: '#3730a3' };
+      case 'QUESTION_LEAVE':
+        return { label: '⚪ Tinggalkan Soal', bg: '#f1f5f9', color: '#475569' };
+      case 'QUESTION_SWITCH':
+        return { label: '🔄 Pindah Soal', bg: '#fef3c7', color: '#92400e' };
+      case 'VIOLATION':
+        return { label: '🚨 Pelanggaran', bg: '#fee2e2', color: '#991b1b' };
+      case 'DISQUALIFIED':
+        return { label: '❌ Diskualifikasi', bg: '#fef2f2', color: '#b91c1c' };
+      case 'SUBMIT':
+      case 'SUBMITTED':
+        return { label: '🏁 Selesai Submit', bg: '#dbeafe', color: '#1e40af' };
+      default:
+        return { label: type || 'EVENT', bg: '#f1f5f9', color: '#334155' };
+    }
+  };
+
+  const handleClose = (e) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    setDetail(null);
+    onClose();
+  };
+
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+    <div
+      className="modal-backdrop"
+      style={{ zIndex: 9999 }}
+      onClick={handleClose}
+    >
+      <div
+        className="modal-card"
+        style={{ maxWidth: 840 }}
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="modal-header">
           <div>
             <h3>
-              📡 Live Telemetry: {detail.nama || detail.studentName} ({detail.nim})
+              📡 Live Telemetry: {detail.nama || detail.studentName || detail.nim} ({detail.nim})
             </h3>
             <div style={{ fontSize: '0.78rem', color: '#64748b' }}>
               Quiz #{detail.quizId} • Auto-sync aktif (2.5s)
@@ -230,11 +298,10 @@ export function LiveDetailModal({ targetSession, token, onClose }) {
           </div>
           <button
             type="button"
+            id="btn-close-live-detail"
             className="btn btn-outline btn-sm btn-touchable"
-            onClick={(e) => {
-              e.stopPropagation();
-              onClose();
-            }}
+            style={{ cursor: 'pointer', zIndex: 10, fontWeight: 700 }}
+            onClick={handleClose}
           >
             ✕ Tutup
           </button>
@@ -251,28 +318,41 @@ export function LiveDetailModal({ targetSession, token, onClose }) {
             <div className="stat-pill">
               <div>
                 <div className="label">Status Sesi</div>
-                <div className="val" style={{ fontSize: '0.92rem' }}>
-                  {detail.status}
+                <div className="val" style={{ fontSize: '0.88rem' }}>
+                  <span
+                    className={`badge ${
+                      detail.status === 'ACTIVE'
+                        ? 'badge-success'
+                        : detail.status === 'DISQUALIFIED'
+                        ? 'badge-danger'
+                        : 'badge-info'
+                    }`}
+                  >
+                    {detail.status || 'SUBMITTED'}
+                  </span>
                 </div>
               </div>
             </div>
             <div className="stat-pill">
               <div>
-                <div className="label">Sedang di Soal</div>
+                <div className="label">Soal / Progres</div>
                 <div className="val" style={{ fontSize: '0.92rem' }}>
-                  #{currentQNum} / {detail.totalQuestions || '?'}
+                  {detail.status === 'ACTIVE'
+                    ? `#${currentQNum} / ${detail.totalQuestions || '?'}`
+                    : `Selesai (${detail.totalQuestions || timingsArr.length || '?'} Soal)`}
                 </div>
               </div>
             </div>
             <div className="stat-pill">
               <div>
                 <div className="label">Total Waktu | Sisa Waktu</div>
-                <div className="val" style={{ fontSize: '0.9rem', color: '#4f46e5' }}>
+                <div className="val" style={{ fontSize: '0.88rem', color: '#4f46e5' }}>
                   {formatDuration(detail.totalElapsedSeconds || 0)} |{' '}
-                  {detail.remainingSeconds !== null &&
+                  {detail.status === 'ACTIVE' &&
+                  detail.remainingSeconds !== null &&
                   detail.remainingSeconds !== undefined
                     ? formatDuration(detail.remainingSeconds)
-                    : '-'}
+                    : '0m 00s'}
                 </div>
               </div>
             </div>
@@ -293,7 +373,7 @@ export function LiveDetailModal({ targetSession, token, onClose }) {
           </div>
 
           <div
-            style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr', gap: 16 }}
+            style={{ display: 'grid', gridTemplateColumns: '1fr 1.25fr', gap: 16 }}
           >
             <div
               style={{
@@ -315,7 +395,7 @@ export function LiveDetailModal({ targetSession, token, onClose }) {
                   const sec = Number(t.totalSeconds) || 0;
                   const pct = Math.min(100, Math.round((sec / maxQSec) * 100));
                   return (
-                    <div key={t.qNum || idx} style={{ marginBottom: 8 }}>
+                    <div key={t.qNum || idx} style={{ marginBottom: 10 }}>
                       <div
                         style={{
                           display: 'flex',
@@ -325,10 +405,15 @@ export function LiveDetailModal({ targetSession, token, onClose }) {
                           marginBottom: 3,
                         }}
                       >
-                        <span>
-                          Soal #{t.qNum || idx + 1} ({t.switchCount || 1}x buka)
+                        <span style={{ color: '#1e293b' }}>
+                          Soal #{t.qNum || idx + 1}
+                          <span style={{ fontSize: '0.7rem', color: '#64748b', marginLeft: 4 }}>
+                            ({t.switchCount || 1}x dibuka)
+                          </span>
                         </span>
-                        <span>{formatDuration(sec)}</span>
+                        <span style={{ color: '#4f46e5', fontWeight: 700 }}>
+                          {formatDuration(sec)}
+                        </span>
                       </div>
                       <div
                         style={{
@@ -343,9 +428,25 @@ export function LiveDetailModal({ targetSession, token, onClose }) {
                             width: `${pct}%`,
                             height: '100%',
                             background: '#4f46e5',
+                            transition: 'width 0.4s ease',
                           }}
                         />
                       </div>
+                      {t.qText && (
+                        <div
+                          style={{
+                            fontSize: '0.7rem',
+                            color: '#64748b',
+                            marginTop: 2,
+                            whiteSpace: 'nowrap',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                          }}
+                          title={t.qText}
+                        >
+                          {t.qText}
+                        </div>
+                      )}
                     </div>
                   );
                 })
@@ -358,7 +459,7 @@ export function LiveDetailModal({ targetSession, token, onClose }) {
                 borderRadius: 10,
                 padding: 14,
                 background: '#f8fafc',
-                maxHeight: 280,
+                maxHeight: 340,
                 overflowY: 'auto',
               }}
             >
@@ -370,40 +471,66 @@ export function LiveDetailModal({ targetSession, token, onClose }) {
                   Belum ada log aktivitas.
                 </div>
               ) : (
-                events.map((ev, idx) => (
-                  <div
-                    key={idx}
-                    style={{
-                      padding: '7px 10px',
-                      borderBottom: '1px solid #e2e8f0',
-                      fontSize: '0.78rem',
-                    }}
-                  >
-                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                      <strong
+                events.map((ev, idx) => {
+                  const b = getBadgeInfo(ev.type);
+                  const jamRiil = ev.timestampISO
+                    ? new Date(ev.timestampISO).toLocaleTimeString('id-ID')
+                    : ev.timestamp
+                    ? new Date(ev.timestamp).toLocaleTimeString('id-ID')
+                    : '';
+                  const elapsedText = `Detik ke-${ev.elapsedSeconds || 0} (${formatDuration(
+                    ev.elapsedSeconds || 0
+                  )})`;
+
+                  return (
+                    <div
+                      key={idx}
+                      style={{
+                        padding: '8px 10px',
+                        borderBottom: '1px solid #e2e8f0',
+                        fontSize: '0.78rem',
+                      }}
+                    >
+                      <div
                         style={{
-                          color:
-                            ev.type === 'VIOLATION'
-                              ? '#dc2626'
-                              : ev.type === 'SUBMITTED'
-                              ? '#16a34a'
-                              : '#1e293b',
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          marginBottom: 2,
                         }}
                       >
-                        {ev.type}
-                      </strong>
-                      <span style={{ color: '#64748b', fontSize: '0.72rem' }}>
-                        {ev.timestampISO
-                          ? new Date(ev.timestampISO).toLocaleTimeString('id-ID')
-                          : ''}
-                      </span>
+                        <span
+                          style={{
+                            fontSize: '0.7rem',
+                            fontWeight: 700,
+                            padding: '2px 6px',
+                            borderRadius: 4,
+                            background: b.bg,
+                            color: b.color,
+                          }}
+                        >
+                          {b.label}
+                        </span>
+                        <div style={{ fontSize: '0.72rem', color: '#64748b' }}>
+                          <span style={{ fontWeight: 600, color: '#4f46e5', marginRight: 6 }}>
+                            {elapsedText}
+                          </span>
+                          <span>{jamRiil}</span>
+                        </div>
+                      </div>
+                      <div
+                        style={{
+                          color: '#1e293b',
+                          fontSize: '0.78rem',
+                          lineHeight: 1.4,
+                          marginTop: 3,
+                        }}
+                      >
+                        {ev.questionText || ev.detail || (ev.questionNum ? `Soal #${ev.questionNum}` : '-')}
+                      </div>
                     </div>
-                    <div style={{ color: '#475569' }}>
-                      {ev.questionText ||
-                        (ev.questionNum ? `Soal #${ev.questionNum}` : '-')}
-                    </div>
-                  </div>
-                ))
+                  );
+                })
               )}
             </div>
           </div>

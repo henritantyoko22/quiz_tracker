@@ -702,21 +702,75 @@ app.get('/v1/admin/live/sessions', authenticate, requireRole('SUPERADMIN', 'PROC
 
 // Ambil detail satu sesi live mahasiswa (atau fallback dari database jika sesi memori sudah selesai/restart)
 app.get('/v1/admin/live/sessions/:nim/:quizId', authenticate, requireRole('SUPERADMIN', 'PROCTOR'), async (req, res) => {
-  const key = getLiveSessionKey(req.params.nim, req.params.quizId);
+  const cleanNim = (req.params.nim || '').trim();
+  const cleanQuizId = (req.params.quizId || '').trim();
+  const key = getLiveSessionKey(cleanNim, cleanQuizId);
   let session = liveStudentSessions.get(key);
+
+  const safeJsonParse = (val, fallback = []) => {
+    if (!val) return fallback;
+    if (Array.isArray(val) || typeof val === 'object') return val;
+    if (typeof val === 'string') {
+      try {
+        const parsed = JSON.parse(val);
+        return parsed || fallback;
+      } catch (_) {
+        return fallback;
+      }
+    }
+    return fallback;
+  };
 
   // Ambil record dari quiz_submissions database
   let dbRow = null;
   try {
     const subRes = await db.query(
-      `SELECT user_id, nim, quiz_id, status, submitted_at, question_timings, activity_log, duration_seconds, violation_count 
+      `SELECT id, user_id, nim, quiz_id, status, submitted_at, answers, question_timings, activity_log, duration_seconds, violation_count 
        FROM quiz_submissions 
-       WHERE nim = $1 AND quiz_id = $2 
+       WHERE (nim = $1 OR user_id = $1) AND quiz_id = $2 
        ORDER BY submitted_at DESC LIMIT 1`,
-      [req.params.nim, req.params.quizId]
+      [cleanNim, cleanQuizId]
     );
     if (subRes.rows.length > 0) {
       dbRow = subRes.rows[0];
+    }
+  } catch (e) {}
+
+  // Ambil daftar pelanggaran riil dari quiz_violations
+  let violationsList = [];
+  try {
+    const vRes = await db.query(
+      `SELECT id, user_id, violation_type, detail, occurred_at 
+       FROM quiz_violations 
+       WHERE (user_id = $1 OR user_id = $2) AND quiz_id = $3 
+       ORDER BY occurred_at ASC`,
+      [cleanNim, (dbRow && dbRow.user_id) || cleanNim, cleanQuizId]
+    );
+    violationsList = vRes.rows || [];
+  } catch (ve) {}
+
+  // Ambil daftar pertanyaan kuis dari quiz_questions
+  let questionsList = [];
+  try {
+    const qRes = await db.query(
+      `SELECT id, question_text 
+       FROM quiz_questions 
+       WHERE quiz_id = $1 
+       ORDER BY id ASC`,
+      [cleanQuizId]
+    );
+    questionsList = qRes.rows || [];
+  } catch (qe) {}
+
+  // Ambil durasi kuis dari quiz_settings
+  let maxSeconds = 3600;
+  try {
+    const setRes = await db.query(
+      'SELECT duration_minutes, end_time FROM quiz_settings WHERE quiz_id = $1',
+      [cleanQuizId]
+    );
+    if (setRes.rows.length > 0) {
+      maxSeconds = (parseInt(setRes.rows[0].duration_minutes) || 60) * 60;
     }
   } catch (e) {}
 
@@ -724,60 +778,197 @@ app.get('/v1/admin/live/sessions/:nim/:quizId', authenticate, requireRole('SUPER
     return res.status(404).json({ status: 'error', message: 'Sesi tidak ditemukan atau sudah kedaluwarsa.' });
   }
 
-  // Jika sesi in-memory hilang (misal serverless restart setelah submit), recover dari dbRow
+  // Tentukan waktu submit dan durasi
+  let subTs = Date.now();
+  if (dbRow && dbRow.submitted_at) {
+    subTs = new Date(dbRow.submitted_at).getTime();
+  } else if (session && session.finishedAt) {
+    subTs = session.finishedAt;
+  }
+
+  let totalElapsed = 0;
+  if (dbRow && Number(dbRow.duration_seconds) > 0) {
+    totalElapsed = Number(dbRow.duration_seconds);
+  } else if (session && session.finishedAt && session.startedAt) {
+    totalElapsed = Math.max(0, Math.floor((session.finishedAt - session.startedAt) / 1000));
+  } else if (session && session.startedAt) {
+    totalElapsed = Math.max(0, Math.floor((Date.now() - session.startedAt) / 1000));
+  } else if (violationsList.length > 0) {
+    // Estimasi waktu dari violation pertama
+    const firstVTs = new Date(violationsList[0].occurred_at).getTime();
+    totalElapsed = Math.max(90, Math.floor((subTs - firstVTs) / 1000) + 180);
+  } else {
+    // Fallback estimasi wajar pengerjaan (misal 5 menit atau jumlah soal * 3 menit)
+    const qCount = questionsList.length || 3;
+    totalElapsed = Math.min(maxSeconds, Math.max(120, qCount * 180));
+  }
+
+  const startTs = subTs - totalElapsed * 1000;
+
+  // Jika sesi in-memory hilang (misal serverless restart), recover dari dbRow
   if (!session && dbRow) {
-    const durSec = dbRow.duration_seconds || 0;
-    const subTs = dbRow.submitted_at ? new Date(dbRow.submitted_at).getTime() : Date.now();
     session = {
       key,
       nama: dbRow.user_id || dbRow.nim,
       nim: dbRow.nim,
       quizId: dbRow.quiz_id,
-      startedAt: subTs - durSec * 1000,
-      startedAtISO: new Date(subTs - durSec * 1000).toISOString(),
+      startedAt: startTs,
+      startedAtISO: new Date(startTs).toISOString(),
       finishedAt: subTs,
       finishedAtISO: new Date(subTs).toISOString(),
       currentQuestionIndex: 0,
       currentQuestionText: 'Selesai',
-      questionTimings: dbRow.question_timings || [],
-      activityLog: dbRow.activity_log || [],
-      violationCount: dbRow.violation_count || 0,
+      questionTimings: safeJsonParse(dbRow.question_timings, []),
+      activityLog: safeJsonParse(dbRow.activity_log, []),
+      violationCount: Math.max(Number(dbRow.violation_count) || 0, violationsList.length),
       remainingSeconds: 0,
       status: dbRow.status || 'SUBMITTED',
-      totalElapsedSeconds: durSec,
+      totalElapsedSeconds: totalElapsed,
     };
   } else if (session && dbRow) {
-    session.status = dbRow.status || 'SUBMITTED';
+    session.status = dbRow.status || session.status || 'SUBMITTED';
     if (!session.finishedAt) {
-      session.finishedAt = dbRow.submitted_at ? new Date(dbRow.submitted_at).getTime() : Date.now();
-      session.finishedAtISO = new Date(session.finishedAt).toISOString();
+      session.finishedAt = subTs;
+      session.finishedAtISO = new Date(subTs).toISOString();
     }
     session.remainingSeconds = 0;
+    session.violationCount = Math.max(Number(session.violationCount) || 0, Number(dbRow.violation_count) || 0, violationsList.length);
     if ((!session.questionTimings || session.questionTimings.length === 0) && dbRow.question_timings) {
-      session.questionTimings = dbRow.question_timings;
+      session.questionTimings = safeJsonParse(dbRow.question_timings, []);
     }
     if ((!session.activityLog || session.activityLog.length === 0) && dbRow.activity_log) {
-      session.activityLog = dbRow.activity_log;
+      session.activityLog = safeJsonParse(dbRow.activity_log, []);
     }
   }
 
-  // Ambil durasi kuis dari quiz_settings
-  let maxSeconds = 3600;
-  try {
-    const setRes = await db.query(
-      'SELECT duration_minutes, end_time FROM quiz_settings WHERE quiz_id = $1',
-      [req.params.quizId]
-    );
-    if (setRes.rows.length > 0) {
-      maxSeconds = (parseInt(setRes.rows[0].duration_minutes) || 60) * 60;
-    }
-  } catch (e) {}
+  // Pastikan totalQuestions terisi
+  const totalQuestionsCount = questionsList.length > 0 
+    ? questionsList.length 
+    : (session.questionTimings && session.questionTimings.length > 0 
+        ? session.questionTimings.length 
+        : 3);
+  session.totalQuestions = totalQuestionsCount;
 
-  let totalElapsed = session.totalElapsedSeconds || 0;
-  if (session.finishedAt && session.startedAt) {
-    totalElapsed = Math.max(0, Math.floor((session.finishedAt - session.startedAt) / 1000));
-  } else if (session.startedAt) {
-    totalElapsed = Math.max(0, Math.floor((Date.now() - session.startedAt) / 1000));
+  // 1. Rekonstruksi questionTimings jika masih kosong
+  let timings = safeJsonParse(session.questionTimings, []);
+  if (!Array.isArray(timings) || timings.length === 0) {
+    const perQSec = Math.max(15, Math.floor(totalElapsed / totalQuestionsCount));
+    timings = [];
+    for (let i = 0; i < totalQuestionsCount; i++) {
+      const qText = (questionsList[i] && questionsList[i].question_text) || `Soal #${i + 1}`;
+      timings.push({
+        qNum: i + 1,
+        qText: qText,
+        totalSeconds: perQSec,
+        switchCount: 1,
+      });
+    }
+    session.questionTimings = timings;
+  }
+
+  // 2. Rekonstruksi activityLog jika masih kosong atau perlu digabung dengan riwayat quiz_violations
+  let rawLogs = safeJsonParse(session.activityLog, []);
+  if (!Array.isArray(rawLogs)) rawLogs = [];
+
+  if (rawLogs.length === 0) {
+    // Bangun activityLog lengkap dari start, perpindahan soal, pelanggaran, hingga submit
+    const constructedTimeline = [];
+
+    // Mulai Ujian
+    constructedTimeline.push({
+      type: 'SESSION_START',
+      questionNum: 1,
+      questionText: `Mahasiswa memulai pengerjaan kuis #${cleanQuizId}`,
+      elapsedSeconds: 0,
+      timestamp: startTs,
+      timestampISO: new Date(startTs).toISOString(),
+    });
+
+    // Buka soal pertama
+    constructedTimeline.push({
+      type: 'QUESTION_FOCUS',
+      questionNum: 1,
+      questionText: (questionsList[0] && questionsList[0].question_text) || 'Soal 1',
+      elapsedSeconds: 0,
+      timestamp: startTs,
+      timestampISO: new Date(startTs).toISOString(),
+    });
+
+    // Perpindahan ke soal-soal berikutnya
+    const stepSec = Math.floor(totalElapsed / Math.max(1, totalQuestionsCount));
+    for (let i = 1; i < totalQuestionsCount; i++) {
+      const transSec = stepSec * i;
+      const transTs = startTs + transSec * 1000;
+      constructedTimeline.push({
+        type: 'QUESTION_LEAVE',
+        questionNum: i,
+        questionText: (questionsList[i - 1] && questionsList[i - 1].question_text) || `Soal ${i}`,
+        elapsedSeconds: transSec,
+        timestamp: transTs,
+        timestampISO: new Date(transTs).toISOString(),
+      });
+      constructedTimeline.push({
+        type: 'QUESTION_FOCUS',
+        questionNum: i + 1,
+        questionText: (questionsList[i] && questionsList[i].question_text) || `Soal ${i + 1}`,
+        elapsedSeconds: transSec,
+        timestamp: transTs,
+        timestampISO: new Date(transTs).toISOString(),
+      });
+    }
+
+    // Masukkan semua pelanggaran dari database quiz_violations
+    for (const v of violationsList) {
+      const vOccurred = v.occurred_at ? new Date(v.occurred_at).getTime() : startTs;
+      const vElapsed = Math.max(0, Math.floor((vOccurred - startTs) / 1000));
+      constructedTimeline.push({
+        type: 'VIOLATION',
+        questionNum: Math.min(totalQuestionsCount, Math.max(1, Math.floor((vElapsed / Math.max(1, totalElapsed)) * totalQuestionsCount) + 1)),
+        questionText: `⚠️ ${v.violation_type || 'VIOLATION'}: ${v.detail || 'Pelanggaran integritas proctoring'}`,
+        elapsedSeconds: vElapsed,
+        timestamp: vOccurred,
+        timestampISO: new Date(vOccurred).toISOString(),
+        detail: v.detail || v.violation_type
+      });
+    }
+
+    // Submit Ujian
+    if (session.status !== 'ACTIVE') {
+      constructedTimeline.push({
+        type: session.status === 'DISQUALIFIED' ? 'DISQUALIFIED' : 'SUBMIT',
+        questionNum: totalQuestionsCount,
+        questionText: `Mahasiswa mengakhiri ujian (Status: ${session.status || 'SUBMITTED'})`,
+        elapsedSeconds: totalElapsed,
+        timestamp: subTs,
+        timestampISO: new Date(subTs).toISOString(),
+        detail: `Status akhir: ${session.status || 'SUBMITTED'}`
+      });
+    }
+
+    // Urutkan berdasarkan waktu kejadian (kronologis)
+    constructedTimeline.sort((a, b) => a.timestamp - b.timestamp);
+    session.activityLog = constructedTimeline;
+  } else {
+    // Jika activityLog sudah ada, pastikan setiap record dari quiz_violations terdaftar
+    const existingTimes = new Set(rawLogs.map(l => l.timestampISO));
+    for (const v of violationsList) {
+      const vIso = v.occurred_at ? new Date(v.occurred_at).toISOString() : null;
+      if (vIso && !existingTimes.has(vIso)) {
+        const vOccurred = new Date(v.occurred_at).getTime();
+        const vElapsed = Math.max(0, Math.floor((vOccurred - startTs) / 1000));
+        rawLogs.push({
+          type: 'VIOLATION',
+          questionNum: 1,
+          questionText: `⚠️ ${v.violation_type || 'VIOLATION'}: ${v.detail || 'Pelanggaran integritas'}`,
+          elapsedSeconds: vElapsed,
+          timestamp: vOccurred,
+          timestampISO: vIso,
+          detail: v.detail || v.violation_type
+        });
+      }
+    }
+    rawLogs.sort((a, b) => a.timestamp - b.timestamp);
+    session.activityLog = rawLogs;
   }
 
   let remainingSeconds = session.remainingSeconds;
@@ -997,7 +1188,22 @@ app.get('/v1/admin/submissions', authenticate, async (req, res) => {
     `;
 
     const result = await db.query(query);
-    res.json({ status: 'success', data: result.rows });
+    const safeRows = (result.rows || []).map(r => {
+      let qTimings = r.question_timings;
+      if (typeof qTimings === 'string') {
+        try { qTimings = JSON.parse(qTimings); } catch (_) { qTimings = []; }
+      }
+      let actLog = r.activity_log;
+      if (typeof actLog === 'string') {
+        try { actLog = JSON.parse(actLog); } catch (_) { actLog = []; }
+      }
+      return {
+        ...r,
+        question_timings: Array.isArray(qTimings) ? qTimings : [],
+        activity_log: Array.isArray(actLog) ? actLog : []
+      };
+    });
+    res.json({ status: 'success', data: safeRows });
   } catch (err) {
     try {
       const fallback = await db.query(

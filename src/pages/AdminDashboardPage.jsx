@@ -584,20 +584,33 @@ export function AdminDashboardPage() {
                         setAnswerModal({ sub: s, entries })
                       }
                       onOpenViolationModal={(s) => setViolationModal(s)}
-                      onOpenTimingModal={(s) =>
+                      onOpenTimingModal={(s) => {
+                        const parseJson = (val) => {
+                          if (!val) return [];
+                          if (Array.isArray(val)) return val;
+                          if (typeof val === 'string') {
+                            try {
+                              const p = JSON.parse(val);
+                              return Array.isArray(p) ? p : [];
+                            } catch (_) {
+                              return [];
+                            }
+                          }
+                          return [];
+                        };
                         setLiveDetailModal({
                           nama: s.nama,
                           studentName: s.nama,
                           nim: s.nim,
                           quizId: s.quiz_id,
                           status: s.status || 'SUBMITTED',
-                          questionTimings: s.question_timings || [],
-                          activityLog: s.activity_log || [],
-                          totalElapsedSeconds: s.duration_seconds || 0,
+                          questionTimings: parseJson(s.question_timings),
+                          activityLog: parseJson(s.activity_log),
+                          totalElapsedSeconds: Number(s.duration_seconds) || 0,
                           remainingSeconds: 0,
                           violationCount: s.violation_count || 0,
-                        })
-                      }
+                        });
+                      }}
                     />
                   ))
                 )}
