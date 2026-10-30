@@ -476,28 +476,10 @@ app.get('/v1/quiz/active', async (req, res) => {
 // Verifikasi peserta kuis PPK, cegah duplikat sesi aktif, dan periksa jatah kesempatan (Max 2x, retake jika didiskualifikasi)
 app.get('/v1/quiz/check-student', async (req, res) => {
   const cleanNim = (req.query.nim || '').trim();
-  let cleanQuizId = (req.query.quizId || '').trim();
+  const cleanQuizId = (req.query.quizId || '').trim();
 
   if (!cleanNim) {
     return res.status(400).json({ status: 'error', message: 'NIM wajib diisi!' });
-  }
-
-  // Jika quizId tidak dioper di URL, deteksi kuis yang sedang aktif secara otomatis
-  if (!cleanQuizId) {
-    try {
-      const act = await db.query(
-        `SELECT quiz_id FROM quiz_settings WHERE is_active = true ORDER BY updated_at DESC LIMIT 1`
-      );
-      if (act.rows.length > 0) {
-        cleanQuizId = act.rows[0].quiz_id;
-      } else {
-        const qq = await db.query(`SELECT DISTINCT quiz_id FROM quiz_questions ORDER BY quiz_id ASC LIMIT 1`);
-        if (qq.rows.length > 0) cleanQuizId = qq.rows[0].quiz_id;
-        else cleanQuizId = '101';
-      }
-    } catch (_) {
-      cleanQuizId = '101';
-    }
   }
 
   try {
@@ -528,39 +510,49 @@ app.get('/v1/quiz/check-student', async (req, res) => {
       });
     }
 
+    // Jika quizId belum dimasukkan, cukup kembalikan identitas valid mahasiswa
+    if (!cleanQuizId) {
+      return res.json({
+        status: 'success',
+        registered: true,
+        student,
+        quizId: null,
+        canStart: false,
+        message: 'NIM terdaftar di PPK. Silakan masukkan Kode Kuis.'
+      });
+    }
+
     // 1. Cek sesi duplikat yang sedang aktif berjalan
-    if (cleanQuizId) {
-      const liveKey = getLiveSessionKey(cleanNim, cleanQuizId);
-      const activeSession = liveStudentSessions.get(liveKey);
-      if (
-        activeSession &&
-        activeSession.status === 'ACTIVE' &&
-        Date.now() - (activeSession.lastHeartbeat || 0) < 45000
-      ) {
-        return res.status(409).json({
-          status: 'error',
-          registered: true,
-          isDuplicateActive: true,
-          student,
-          message: `Sesi kuis #${cleanQuizId} untuk ${student.nama} (${student.nim}) sedang AKTIF berjalan di perangkat/tab lain! Tidak diperkenankan membuka sesi ganda secara bersamaan.`
-        });
-      }
+    const liveKey = getLiveSessionKey(cleanNim, cleanQuizId);
+    const activeSession = liveStudentSessions.get(liveKey);
+    if (
+      activeSession &&
+      activeSession.status === 'ACTIVE' &&
+      Date.now() - (activeSession.lastHeartbeat || 0) < 45000
+    ) {
+      return res.status(409).json({
+        status: 'error',
+        registered: true,
+        isDuplicateActive: true,
+        student,
+        quizId: cleanQuizId,
+        canStart: false,
+        message: `Sesi kuis #${cleanQuizId} untuk ${student.nama} (${student.nim}) sedang AKTIF berjalan di perangkat/tab lain! Tidak diperkenankan membuka sesi ganda secara bersamaan.`
+      });
     }
 
     // 2. Cek histori pengerjaan pada kuis ini (Aturan 2 Kesempatan: boleh retake jika didiskualifikasi)
     let submissions = [];
-    if (cleanQuizId) {
-      try {
-        const subRes = await db.query(
-          `SELECT id, status, submitted_at, violation_count, attempt 
-           FROM quiz_submissions 
-           WHERE nim = $1 AND quiz_id = $2 
-           ORDER BY submitted_at ASC`,
-          [cleanNim, cleanQuizId]
-        );
-        submissions = subRes.rows;
-      } catch (_) {}
-    }
+    try {
+      const subRes = await db.query(
+        `SELECT id, status, submitted_at, violation_count, attempt 
+         FROM quiz_submissions 
+         WHERE nim = $1 AND quiz_id = $2 
+         ORDER BY submitted_at ASC`,
+        [cleanNim, cleanQuizId]
+      );
+      submissions = subRes.rows;
+    } catch (_) {}
 
     const attemptsCount = submissions.length;
     let canStart = true;
