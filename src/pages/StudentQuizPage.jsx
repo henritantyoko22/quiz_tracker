@@ -31,6 +31,17 @@ export function StudentQuizPage() {
   const [finishSummary, setFinishSummary] = useState(null);
   const [toasts, setToasts] = useState([]);
 
+  // Sembunyikan console logging di browser agar tidak disalahgunakan di DevTools
+  useEffect(() => {
+    try {
+      const noop = () => {};
+      window.console.log = noop;
+      window.console.debug = noop;
+      window.console.info = noop;
+      window.console.warn = noop;
+    } catch (_) {}
+  }, []);
+
   // Verification & Retake Eligibility State (PPK Participant Validation)
   const [studentCheck, setStudentCheck] = useState({
     loading: false,
@@ -729,21 +740,22 @@ export function StudentQuizPage() {
                 <label style={{ fontWeight: 700, fontSize: '0.92rem', color: '#1e293b', marginBottom: 6, display: 'block' }}>
                   🎓 1. Masukkan Nomor Induk Mahasiswa (NIM)
                 </label>
-                <div style={{ position: 'relative' }}>
+                <div style={{ width: '100%', position: 'relative' }}>
                   <input
                     type="text"
                     inputMode="numeric"
                     autoFocus
                     className="form-input"
                     required
-                    placeholder="Ketik NIM Anda (contoh: 24060124130080)..."
+                    placeholder="Ketik NIM Anda"
                     value={nim}
                     onChange={(e) => setNim(e.target.value)}
                     style={{
-                      fontSize: '1.05rem',
-                      fontWeight: 700,
+                      width: '100%',
+                      boxSizing: 'border-box',
+                      fontSize: '1rem',
+                      fontWeight: 600,
                       padding: '11px 14px',
-                      letterSpacing: '0.5px',
                       borderColor: studentCheck.verified ? '#22c55e' : studentCheck.error ? '#ef4444' : '#cbd5e1',
                       background: studentCheck.verified ? '#f0fdf4' : '#ffffff',
                     }}
@@ -790,9 +802,9 @@ export function StudentQuizPage() {
                 </div>
                 <div style={{ fontSize: '0.76rem', color: '#64748b', marginTop: 4 }}>
                   {studentCheck.loading ? (
-                    <span style={{ color: '#2563eb' }}>⏳ Memeriksa NIM di database peserta PPK...</span>
+                    <span style={{ color: '#2563eb' }}>⏳ Memeriksa NIM di database...</span>
                   ) : studentCheck.verified ? (
-                    <span style={{ color: '#16a34a', fontWeight: 600 }}>✅ NIM terdaftar di database mata kuliah PPK.</span>
+                    <span style={{ color: '#16a34a', fontWeight: 600 }}>✅ NIM terdaftar di database.</span>
                   ) : (
                     <span>Ketik NIM Anda terlebih dahulu untuk validasi data mahasiswa.</span>
                   )}
@@ -813,12 +825,12 @@ export function StudentQuizPage() {
                     lineHeight: 1.45,
                   }}
                 >
-                  <strong>⛔ NIM Tidak Ditemukan di Database:</strong>
+                  <strong>⛔ NIM Tidak Ditemukan:</strong>
                   <div style={{ marginTop: 4 }}>{studentCheck.error}</div>
                 </div>
               )}
 
-              {/* Card Mahasiswa Terverifikasi dari Database */}
+              {/* Card Mahasiswa Terverifikasi dari Database (Tanpa Informasi Kelas) */}
               {studentCheck.verified && studentCheck.student && (
                 <div
                   style={{
@@ -830,28 +842,20 @@ export function StudentQuizPage() {
                     boxShadow: '0 2px 8px rgba(34, 197, 94, 0.08)',
                   }}
                 >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                    <span style={{ fontWeight: 800, fontSize: '0.88rem', color: '#15803d', display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <span>✅</span> MAHASISWA TERVERIFIKASI
-                    </span>
-                    <span
-                      className="badge badge-success"
-                      style={{ fontSize: '0.82rem', fontWeight: 800, padding: '4px 10px' }}
-                    >
-                      Kelas {studentCheck.student.kelas}
-                    </span>
+                  <div style={{ fontWeight: 800, fontSize: '0.86rem', color: '#15803d', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span>✅</span> MAHASISWA TERVERIFIKASI
                   </div>
                   <div style={{ fontSize: '1.02rem', fontWeight: 800, color: '#0f172a', marginBottom: 2 }}>
                     {studentCheck.student.nama}
                   </div>
-                  <div style={{ fontSize: '0.8rem', color: '#475569' }}>
-                    NIM: <strong>{studentCheck.student.nim}</strong> • Program Studi: {studentCheck.student.prodi || 'Informatika S1'}
+                  <div style={{ fontSize: '0.82rem', color: '#475569' }}>
+                    NIM: <strong>{studentCheck.student.nim}</strong>
                   </div>
                 </div>
               )}
 
               {/* ======================================================== */}
-              {/* LANGKAH 2: MASUKKAN ID QUIZ / KODE SESI UJIAN KELAS      */}
+              {/* LANGKAH 2: MASUKKAN ID QUIZ / KODE SESI UJIAN           */}
               {/* ======================================================== */}
               <div className="form-group" style={{ marginBottom: 14 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
@@ -870,34 +874,34 @@ export function StudentQuizPage() {
                     </span>
                   )}
                 </div>
-                <input
-                  type="text"
-                  className="form-input"
-                  required
-                  disabled={!studentCheck.verified}
-                  placeholder={
-                    studentCheck.verified
-                      ? 'Ketik ID Quiz dari Dosen (contoh: 101, 1029)...'
-                      : '⚠️ Masukkan NIM yang valid di atas terlebih dahulu'
-                  }
-                  value={quizId}
-                  onChange={(e) => setQuizId(e.target.value)}
-                  style={{
-                    fontSize: '1rem',
-                    fontWeight: 600,
-                    padding: '11px 14px',
-                    borderColor:
-                      !studentCheck.verified
-                        ? '#e2e8f0'
-                        : scheduleState.valid
-                        ? '#22c55e'
-                        : quizId.trim() && !scheduleState.loading
-                        ? '#ef4444'
-                        : '#cbd5e1',
-                    background: !studentCheck.verified ? '#f8fafc' : '#ffffff',
-                    cursor: !studentCheck.verified ? 'not-allowed' : 'text',
-                  }}
-                />
+                <div style={{ width: '100%', position: 'relative' }}>
+                  <input
+                    type="text"
+                    className="form-input"
+                    required
+                    disabled={!studentCheck.verified}
+                    placeholder={studentCheck.verified ? 'Ketik ID Quiz' : 'Masukkan NIM terlebih dahulu'}
+                    value={quizId}
+                    onChange={(e) => setQuizId(e.target.value)}
+                    style={{
+                      width: '100%',
+                      boxSizing: 'border-box',
+                      fontSize: '1rem',
+                      fontWeight: 600,
+                      padding: '11px 14px',
+                      borderColor:
+                        !studentCheck.verified
+                          ? '#e2e8f0'
+                          : scheduleState.valid
+                          ? '#22c55e'
+                          : quizId.trim() && !scheduleState.loading
+                          ? '#ef4444'
+                          : '#cbd5e1',
+                      background: !studentCheck.verified ? '#f8fafc' : '#ffffff',
+                      cursor: !studentCheck.verified ? 'not-allowed' : 'text',
+                    }}
+                  />
+                </div>
                 <div style={{ fontSize: '0.76rem', color: '#64748b', marginTop: 4 }}>
                   {!studentCheck.verified ? (
                     <span>Langkah ini akan aktif setelah NIM Anda berhasil terverifikasi.</span>
@@ -907,10 +911,10 @@ export function StudentQuizPage() {
                     <span style={{ color: '#dc2626' }}>❌ ID Quiz tidak ditemukan di database atau belum memiliki soal.</span>
                   ) : quizId.trim() && scheduleState.valid ? (
                     <span style={{ color: '#16a34a' }}>
-                      ✅ ID Quiz valid di database ({scheduleState.questions.length} Soal • {scheduleState.settings?.duration_minutes || 60} Menit).
+                      ✅ ID Quiz valid ({scheduleState.questions.length} Soal • {scheduleState.settings?.duration_minutes || 60} Menit).
                     </span>
                   ) : (
-                    <span>Ketik kode kuis yang diberikan oleh Dosen pengampu untuk kelas Anda.</span>
+                    <span>Ketik kode kuis yang diberikan oleh Dosen pengampu.</span>
                   )}
                 </div>
               </div>

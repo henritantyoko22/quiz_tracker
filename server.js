@@ -7,6 +7,7 @@ const crypto = require('crypto');
 const db = require('./db'); // Konfigurasi koneksi PostgreSQL Neon.tech
 
 const app = express();
+app.disable('x-powered-by');
 
 app.use(cors());
 app.use(express.json());
@@ -506,19 +507,24 @@ app.get('/v1/quiz/check-student', async (req, res) => {
       return res.status(404).json({
         status: 'error',
         registered: false,
-        message: `NIM "${cleanNim}" tidak terdaftar sebagai peserta mata kuliah Pengembangan Platform Khusus (PPK). Hubungi dosen/asisten jika ada kekeliruan.`
+        message: 'NIM tidak terdaftar sebagai peserta mata kuliah.'
       });
     }
+
+    const safeStudent = {
+      nim: student.nim,
+      nama: student.nama
+    };
 
     // Jika quizId belum dimasukkan, cukup kembalikan identitas valid mahasiswa
     if (!cleanQuizId) {
       return res.json({
         status: 'success',
         registered: true,
-        student,
+        student: safeStudent,
         quizId: null,
         canStart: false,
-        message: 'NIM terdaftar di PPK. Silakan masukkan Kode Kuis.'
+        message: 'NIM terdaftar. Silakan masukkan Kode Kuis.'
       });
     }
 
@@ -534,10 +540,10 @@ app.get('/v1/quiz/check-student', async (req, res) => {
         status: 'error',
         registered: true,
         isDuplicateActive: true,
-        student,
+        student: safeStudent,
         quizId: cleanQuizId,
         canStart: false,
-        message: `Sesi kuis #${cleanQuizId} untuk ${student.nama} (${student.nim}) sedang AKTIF berjalan di perangkat/tab lain! Tidak diperkenankan membuka sesi ganda secara bersamaan.`
+        message: `Sesi kuis #${cleanQuizId} sedang aktif di perangkat/tab lain.`
       });
     }
 
@@ -570,24 +576,24 @@ app.get('/v1/quiz/check-student', async (req, res) => {
         canStart = true;
         attemptNumber = 2;
         isRetake = true;
-        warningMessage = '⚠️ KESEMPATAN KE-2 (RETAKE): Anda sebelumnya terdiskualifikasi pada percobaan pertama. Anda diberikan 1 kesempatan terakhir untuk mengerjakan kuis ini. Gunakan kesempatan ini dengan tertib!';
+        warningMessage = '⚠️ Anda sebelumnya terdiskualifikasi. Diberikan 1 kesempatan terakhir (Retake) untuk mengerjakan kuis ini.';
       } else {
         canStart = false;
         attemptNumber = 1;
         isRetake = false;
-        warningMessage = `Anda sudah menyelesaikan dan mengumpulkan kuis #${cleanQuizId} (Status: ${firstSub.status || 'SELESAI'}). Tidak dapat mengulang ujian.`;
+        warningMessage = `Anda sudah pernah menyelesaikan dan mengumpulkan kuis #${cleanQuizId}. Tidak dapat mengulang ujian.`;
       }
     } else {
       canStart = false;
       attemptNumber = attemptsCount;
-      warningMessage = `Batas maksimal pengerjaan (2 kesempatan) telah habis untuk kuis #${cleanQuizId}. Anda tidak dapat mengikuti kuis ini lagi.`;
+      warningMessage = `Batas maksimal pengerjaan (2 kesempatan) telah habis untuk kuis #${cleanQuizId}.`;
     }
 
     res.json({
       status: 'success',
       registered: true,
       quizId: cleanQuizId,
-      student,
+      student: safeStudent,
       canStart,
       attemptNumber,
       maxAttempts: 2,
@@ -689,9 +695,9 @@ app.post('/v1/quiz/submit', async (req, res) => {
     liveSession.remainingSeconds = 0;
     liveStudentSessions.set(liveKey, liveSession);
 
-    res.json({ status: 'success', data: result.rows[0] });
+    res.json({ status: 'success', message: 'Jawaban ujian berhasil disimpan.' });
   } catch (err) {
-    res.status(500).json({ status: 'error', message: err.message });
+    res.status(500).json({ status: 'error', message: 'Gagal menyimpan jawaban.' });
   }
 });
 
@@ -772,8 +778,7 @@ app.post('/v1/quiz/live/session', async (req, res) => {
     remainingSeconds: null
   });
 
-  console.log(`🟢 Sesi live dimulai: ${cleanNim} (${studentKelas || 'PPK'}) | Kuis: ${cleanQuizId} | Attempt: ${attempt || 1}`);
-  res.json({ status: 'success', message: 'Sesi live terdaftar.', key, kelas: studentKelas, attempt: attempt || 1 });
+  res.json({ status: 'success' });
 });
 
 // Update heartbeat / data real-time dari peserta
@@ -1511,9 +1516,9 @@ app.post('/v1/admin/submissions/grade', authenticate, requireRole('SUPERADMIN', 
        RETURNING *`,
       [parseInt(grade), feedback || '', submissionId]
     );
-    res.json({ status: 'success', data: result.rows[0] });
+    res.json({ status: 'success', message: 'Jawaban ujian berhasil disimpan.' });
   } catch (err) {
-    res.status(500).json({ status: 'error', message: err.message });
+    res.status(500).json({ status: 'error', message: 'Gagal menyimpan jawaban.' });
   }
 });
 
