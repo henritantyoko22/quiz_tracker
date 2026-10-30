@@ -780,6 +780,7 @@ export function AdminDashboardPage() {
                           totalElapsedSeconds: Number(s.duration_seconds) || 0,
                           remainingSeconds: 0,
                           violationCount: s.violation_count || 0,
+                          submittedAt: s.submitted_at,
                         });
                       }}
                     />

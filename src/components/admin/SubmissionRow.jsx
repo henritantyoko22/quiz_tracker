@@ -120,7 +120,7 @@ export const SubmissionRow = memo(function SubmissionRow({
               className="btn btn-outline btn-xs btn-touchable"
               onClick={() => onOpenTimingModal(sub)}
             >
-              ⏱️ Log Waktu Soal
+              📜 Log Report
             </button>
           </div>
         </div>

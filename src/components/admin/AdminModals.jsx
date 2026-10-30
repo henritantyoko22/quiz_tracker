@@ -194,7 +194,7 @@ export function LiveDetailModal({ targetSession, token, onClose }) {
     setDetail(targetSession);
 
     let active = true;
-    const pollDetail = async () => {
+    const fetchDetail = async () => {
       try {
         const res = await fetch(
           `${API_BASE}/v1/admin/live/sessions/${encodeURIComponent(
@@ -209,11 +209,9 @@ export function LiveDetailModal({ targetSession, token, onClose }) {
       } catch (_) {}
     };
 
-    pollDetail();
-    const interval = setInterval(pollDetail, 2500);
+    fetchDetail();
     return () => {
       active = false;
-      clearInterval(interval);
     };
   }, [targetSession, token]);
 
@@ -243,6 +241,25 @@ export function LiveDetailModal({ targetSession, token, onClose }) {
   // Tampilkan timeline kronologis terbalik (terbaru di atas)
   const events = [...rawEvents].reverse();
   const currentQNum = (Number(detail.currentQuestionIndex) || 0) + 1;
+
+  // Format Tanggal Pelaksanaan Ujian
+  const rawDate = detail.submittedAt || detail.startedAtISO || detail.quizStartTime;
+  const tanggalUjian = rawDate
+    ? new Date(rawDate).toLocaleDateString('id-ID', {
+        day: 'numeric',
+        month: 'long',
+        year: 'numeric',
+      })
+    : '-';
+
+  // Format Jam Dibukanya Kuis
+  const rawOpenTime = detail.startedAtISO || detail.quizStartTime;
+  const jamDibuka = rawOpenTime
+    ? new Date(rawOpenTime).toLocaleTimeString('id-ID', {
+        hour: '2-digit',
+        minute: '2-digit',
+      }) + ' WIB'
+    : '-';
 
   const getBadgeInfo = (type) => {
     switch (type) {
@@ -290,10 +307,10 @@ export function LiveDetailModal({ targetSession, token, onClose }) {
         <div className="modal-header">
           <div>
             <h3>
-              📡 Live Telemetry: {detail.nama || detail.studentName || detail.nim} ({detail.nim})
+              📜 Log Report: {detail.nama || detail.studentName || detail.nim} ({detail.nim})
             </h3>
-            <div style={{ fontSize: '0.78rem', color: '#64748b' }}>
-              Quiz #{detail.quizId} • Auto-sync aktif (2.5s)
+            <div style={{ fontSize: '0.8rem', color: '#475569', marginTop: 3 }}>
+              <strong>Quiz #{detail.quizId}</strong> • Tanggal: <strong>{tanggalUjian}</strong> • Dibuka: <strong>{jamDibuka}</strong>
             </div>
           </div>
           <button
@@ -347,7 +364,7 @@ export function LiveDetailModal({ targetSession, token, onClose }) {
               <div>
                 <div className="label">Total Waktu | Sisa Waktu</div>
                 <div className="val" style={{ fontSize: '0.88rem', color: '#4f46e5' }}>
-                  {formatDuration(detail.totalElapsedSeconds || 0)} |{' '}
+                  {Number(detail.totalElapsedSeconds) > 0 ? formatDuration(detail.totalElapsedSeconds) : '-'} |{' '}
                   {detail.status === 'ACTIVE' &&
                   detail.remainingSeconds !== null &&
                   detail.remainingSeconds !== undefined
@@ -378,8 +395,8 @@ export function LiveDetailModal({ targetSession, token, onClose }) {
               📊 Durasi Pengerjaan per Nomor Soal
             </div>
             {timingsArr.length === 0 ? (
-              <div style={{ fontSize: '0.82rem', color: '#94a3b8', padding: '12px 0' }}>
-                Belum ada data durasi per soal.
+              <div style={{ fontSize: '0.82rem', color: '#64748b', padding: '12px 14px', background: '#f8fafc', borderRadius: 8, border: '1px dashed #cbd5e1' }}>
+                ℹ️ Rincian durasi per nomor soal tidak terekam pada sesi ini (sesi lama hanya mencatat log pelanggaran dan waktu submit).
               </div>
             ) : (
               <div

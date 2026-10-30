@@ -734,11 +734,11 @@ export function StudentQuizPage() {
 
             <form onSubmit={handleStartExam}>
               {/* ======================================================== */}
-              {/* LANGKAH 1 (ATAS): MASUKKAN NOMOR INDUK MAHASISWA (NIM) */}
+              {/* MASUKKAN NOMOR INDUK MAHASISWA (NIM)                     */}
               {/* ======================================================== */}
               <div className="form-group" style={{ marginBottom: 14 }}>
                 <label style={{ fontWeight: 700, fontSize: '0.92rem', color: '#1e293b', marginBottom: 6, display: 'block' }}>
-                  🎓 1. Masukkan Nomor Induk Mahasiswa (NIM)
+                  🎓 Masukkan Nomor Induk Mahasiswa (NIM)
                 </label>
                 <div style={{ width: '100%', position: 'relative' }}>
                   <input
@@ -803,9 +803,7 @@ export function StudentQuizPage() {
                 <div style={{ fontSize: '0.76rem', color: '#64748b', marginTop: 4 }}>
                   {studentCheck.loading ? (
                     <span style={{ color: '#2563eb' }}>⏳ Memeriksa NIM di database...</span>
-                  ) : studentCheck.verified ? (
-                    <span style={{ color: '#16a34a', fontWeight: 600 }}>✅ NIM terdaftar di database.</span>
-                  ) : (
+                  ) : studentCheck.verified ? null : (
                     <span>Ketik NIM Anda terlebih dahulu untuk validasi data mahasiswa.</span>
                   )}
                 </div>
@@ -855,7 +853,7 @@ export function StudentQuizPage() {
               )}
 
               {/* ======================================================== */}
-              {/* LANGKAH 2: MASUKKAN ID QUIZ / KODE SESI UJIAN           */}
+              {/* MASUKKAN ID QUIZ / KODE SESI UJIAN                      */}
               {/* ======================================================== */}
               <div className="form-group" style={{ marginBottom: 14 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
@@ -866,7 +864,7 @@ export function StudentQuizPage() {
                       color: studentCheck.verified ? '#1e293b' : '#94a3b8',
                     }}
                   >
-                    🔑 2. Masukkan ID Quiz / Kode Ujian
+                    🔑 Masukkan ID Quiz / Kode Ujian
                   </label>
                   {quizId.trim() && scheduleState.valid && (
                     <span className="badge badge-info" style={{ fontSize: '0.72rem', fontWeight: 700 }}>
