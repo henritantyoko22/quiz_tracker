@@ -15,6 +15,25 @@ export function StudentQuizPage() {
     return params.get('quizId') || '';
   });
 
+  // Otomatis deteksi & muat kuis yang sedang aktif saat portal dibuka
+  useEffect(() => {
+    if (quizId) return;
+    let isMounted = true;
+    fetch(`${API_BASE}/v1/quiz/active`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (isMounted && data.status === 'success' && data.data && data.data.quiz_id) {
+          setQuizId(String(data.data.quiz_id));
+        }
+      })
+      .catch(() => {
+        if (isMounted) setQuizId('101');
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, [quizId]);
+
   // Schedule & Validation Info
   const [scheduleState, setScheduleState] = useState({
     loading: false,
@@ -211,12 +230,13 @@ export function StudentQuizPage() {
         loading: false,
         verified: false,
         student: null,
-        canStart: true,
+        canStart: false,
         attemptNumber: 1,
         isRetake: false,
         warningMessage: null,
         error: '',
       });
+      setStudentName('');
       return;
     }
 
@@ -241,6 +261,9 @@ export function StudentQuizPage() {
             error: '',
           });
           setStudentName(data.student.nama);
+          if (data.quizId && (!quizId || quizId !== data.quizId)) {
+            setQuizId(String(data.quizId));
+          }
         } else {
           setStudentCheck({
             loading: false,
@@ -254,6 +277,7 @@ export function StudentQuizPage() {
               (data && data.message) ||
               'NIM tidak terdaftar sebagai peserta mata kuliah PPK.',
           });
+          setStudentName((data && data.student && data.student.nama) || '');
         }
       } catch (err) {
         setStudentCheck((prev) => ({
@@ -723,109 +747,185 @@ export function StudentQuizPage() {
             </div>
 
             <form onSubmit={handleStartExam}>
-              <div className="form-group">
-                <label>Nomor / ID Quiz</label>
-                <input
-                  type="text"
-                  className="form-input"
-                  required
-                  placeholder="Masukkan ID Quiz dari Dosen (misal: 101)"
-                  value={quizId}
-                  onChange={(e) => setQuizId(e.target.value)}
-                />
+              <div className="form-group" style={{ marginBottom: 14 }}>
+                <label style={{ fontWeight: 700, fontSize: '0.92rem', color: '#1e293b', marginBottom: 8, display: 'block' }}>
+                  🎓 Masukkan NIM (Nomor Induk Mahasiswa)
+                </label>
+                <div style={{ position: 'relative' }}>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    autoFocus
+                    className="form-input"
+                    required
+                    placeholder="Contoh: 24060124130080"
+                    value={nim}
+                    onChange={(e) => setNim(e.target.value)}
+                    style={{
+                      fontSize: '1.08rem',
+                      fontWeight: 700,
+                      padding: '12px 14px',
+                      letterSpacing: '0.6px',
+                      borderColor: studentCheck.verified ? '#22c55e' : studentCheck.error ? '#ef4444' : '#cbd5e1',
+                      background: studentCheck.verified ? '#f0fdf4' : '#ffffff',
+                    }}
+                  />
+                  {nim && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setNim('');
+                        setStudentName('');
+                        setStudentCheck({
+                          loading: false,
+                          verified: false,
+                          student: null,
+                          canStart: false,
+                          attemptNumber: 1,
+                          isRetake: false,
+                          warningMessage: null,
+                          error: '',
+                        });
+                      }}
+                      style={{
+                        position: 'absolute',
+                        right: 12,
+                        top: '50%',
+                        transform: 'translateY(-50%)',
+                        background: '#e2e8f0',
+                        border: 'none',
+                        borderRadius: '50%',
+                        width: 22,
+                        height: 22,
+                        cursor: 'pointer',
+                        color: '#475569',
+                        fontSize: '0.75rem',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }}
+                      title="Hapus NIM"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
+                <div style={{ fontSize: '0.76rem', color: '#64748b', marginTop: 6 }}>
+                  💡 Cukup input NIM Anda. Nama, kelas PPK, dan verifikasi sesi otomatis terdeteksi & di-ACC oleh sistem.
+                </div>
               </div>
 
-              <div className="form-group">
-                <label>Nomor Induk Mahasiswa (NIM)</label>
-                <input
-                  type="text"
-                  className="form-input"
-                  required
-                  placeholder="Contoh: 24060124130080"
-                  value={nim}
-                  onChange={(e) => setNim(e.target.value)}
-                />
-              </div>
-
-              <div className="form-group">
-                <label>Nama Lengkap Mahasiswa</label>
-                <input
-                  type="text"
-                  className="form-input"
-                  required
-                  placeholder="Nama otomatis terisi setelah input NIM valid..."
-                  value={studentName}
-                  onChange={(e) => setStudentName(e.target.value)}
-                  readOnly={studentCheck.verified}
-                  style={studentCheck.verified ? { background: '#f8fafc', fontWeight: 600 } : {}}
-                />
-              </div>
-
-              {/* Status Verifikasi Peserta PPK & Kesempatan */}
+              {/* Status Loading */}
               {studentCheck.loading && (
-                <div style={{ fontSize: '0.82rem', color: '#64748b', padding: '8px 10px', background: '#f1f5f9', borderRadius: 8, marginBottom: 12 }}>
-                  ⏳ Memverifikasi data peserta & izin sesi...
+                <div
+                  style={{
+                    fontSize: '0.84rem',
+                    color: '#2563eb',
+                    padding: '10px 14px',
+                    background: '#eff6ff',
+                    border: '1px solid #bfdbfe',
+                    borderRadius: 8,
+                    marginBottom: 14,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                  }}
+                >
+                  <span className="live-dot online" /> Sedang mencari data mahasiswa & memeriksa izin sesi...
                 </div>
               )}
 
+              {/* Status ACC & Identitas Mahasiswa Terverifikasi */}
               {studentCheck.verified && studentCheck.student && (
                 <div
                   style={{
-                    background: '#f0fdf4',
-                    border: '1px solid #86efac',
-                    borderRadius: 10,
-                    padding: '12px 14px',
+                    background: 'linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%)',
+                    border: '1.5px solid #4ade80',
+                    borderRadius: 12,
+                    padding: '14px 16px',
                     marginBottom: 14,
+                    boxShadow: '0 4px 12px rgba(22, 163, 74, 0.08)',
                   }}
                 >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                    <span style={{ fontWeight: 800, fontSize: '0.88rem', color: '#166534' }}>
-                      ✅ Terdaftar di Kelas PPK
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                    <span style={{ fontWeight: 800, fontSize: '0.92rem', color: '#15803d', display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span>✅</span> TERVERIFIKASI & ACC
                     </span>
                     <span
                       className="badge badge-success"
-                      style={{ fontSize: '0.8rem', fontWeight: 800, padding: '3px 8px' }}
+                      style={{ fontSize: '0.82rem', fontWeight: 800, padding: '4px 10px' }}
                     >
                       Kelas {studentCheck.student.kelas}
                     </span>
                   </div>
-                  <div style={{ fontSize: '0.8rem', color: '#15803d', lineHeight: 1.5 }}>
-                    <strong>{studentCheck.student.nama}</strong> ({studentCheck.student.nim})<br />
-                    Prodi: {studentCheck.student.prodi || 'Informatika'}
+                  <div style={{ fontSize: '1.05rem', fontWeight: 800, color: '#0f172a', marginBottom: 2 }}>
+                    {studentCheck.student.nama}
                   </div>
-                  <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px dashed #bbf7d0' }}>
+                  <div style={{ fontSize: '0.82rem', color: '#475569' }}>
+                    NIM: <strong>{studentCheck.student.nim}</strong> • {studentCheck.student.prodi || 'Informatika S1'}
+                  </div>
+
+                  <div
+                    style={{
+                      marginTop: 10,
+                      paddingTop: 10,
+                      borderTop: '1px dashed #86efac',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      flexWrap: 'wrap',
+                      gap: 6,
+                    }}
+                  >
+                    <span className="badge badge-info" style={{ fontSize: '0.78rem' }}>
+                      📚 Quiz #{quizId || '101'}
+                    </span>
                     {studentCheck.isRetake ? (
-                      <div>
-                        <span className="badge badge-warning" style={{ fontSize: '0.78rem', fontWeight: 800 }}>
-                          🔁 Retake Kuis (Kesempatan ke-2 dari 2)
-                        </span>
-                        <div style={{ fontSize: '0.75rem', color: '#b45309', marginTop: 4, lineHeight: 1.4 }}>
-                          ⚠️ Anda terdeteksi pernah didiskualifikasi sebelumnya. Diberikan izin untuk mengerjakan ulang 1x lagi. Ini adalah <strong>kesempatan terakhir</strong> Anda!
-                        </div>
-                      </div>
+                      <span className="badge badge-warning" style={{ fontSize: '0.78rem', fontWeight: 800 }}>
+                        🔁 Retake (Kesempatan ke-2 dari 2)
+                      </span>
                     ) : (
-                      <span className="badge badge-info" style={{ fontSize: '0.78rem' }}>
+                      <span className="badge badge-neutral" style={{ fontSize: '0.78rem' }}>
                         🎯 Percobaan Pertama (Kesempatan 1 dari 2)
                       </span>
                     )}
                   </div>
+
+                  {studentCheck.isRetake && (
+                    <div
+                      style={{
+                        fontSize: '0.76rem',
+                        color: '#b45309',
+                        marginTop: 8,
+                        lineHeight: 1.4,
+                        background: '#fffbeb',
+                        border: '1px solid #fde68a',
+                        padding: '8px 10px',
+                        borderRadius: 8,
+                      }}
+                    >
+                      ⚠️ <strong>Catatan:</strong> Anda sebelumnya terdiskualifikasi pada kesempatan ke-1. Sesi ini adalah <strong>kesempatan terakhir</strong> Anda!
+                    </div>
+                  )}
                 </div>
               )}
 
+              {/* Status Error / Ditolak */}
               {studentCheck.error && (
                 <div
                   style={{
                     background: '#fef2f2',
                     border: '1px solid #fca5a5',
                     color: '#991b1b',
-                    borderRadius: 8,
-                    padding: '10px 14px',
-                    fontSize: '0.82rem',
+                    borderRadius: 10,
+                    padding: '12px 14px',
+                    fontSize: '0.84rem',
                     marginBottom: 14,
-                    lineHeight: 1.4,
+                    lineHeight: 1.45,
                   }}
                 >
-                  <strong>⛔ Akses Masuk Ditolak:</strong> {studentCheck.error}
+                  <strong>⛔ Akses Masuk Ditolak:</strong>
+                  <div style={{ marginTop: 4 }}>{studentCheck.error}</div>
                 </div>
               )}
 
@@ -836,8 +936,8 @@ export function StudentQuizPage() {
                     border: '1px solid #fde68a',
                     color: '#92400e',
                     borderRadius: 8,
-                    padding: '8px 12px',
-                    fontSize: '0.8rem',
+                    padding: '10px 12px',
+                    fontSize: '0.82rem',
                     marginBottom: 14,
                   }}
                 >
@@ -845,9 +945,12 @@ export function StudentQuizPage() {
                 </div>
               )}
 
-              <div className={`schedule-banner ${scheduleState.type}`}>
-                {scheduleState.message}
-              </div>
+              {/* Info Jadwal & Soal Ujian */}
+              {scheduleState.message && (
+                <div className={`schedule-banner ${scheduleState.type}`} style={{ marginBottom: 14 }}>
+                  {scheduleState.message}
+                </div>
+              )}
 
               <button
                 type="submit"
@@ -860,9 +963,11 @@ export function StudentQuizPage() {
                   studentCheck.loading
                 }
                 style={{
+                  width: '100%',
                   justifyContent: 'center',
-                  padding: '12px',
-                  marginTop: 6,
+                  padding: '14px',
+                  fontSize: '1rem',
+                  fontWeight: 700,
                   opacity:
                     !scheduleState.valid ||
                     scheduleState.loading ||
@@ -881,11 +986,17 @@ export function StudentQuizPage() {
                       : 'pointer',
                 }}
               >
-                {scheduleState.loading || studentCheck.loading
-                  ? 'Memeriksa Verifikasi & Jadwal...'
+                {studentCheck.loading
+                  ? '⏳ Memverifikasi NIM...'
+                  : !nim.trim()
+                  ? 'Masukkan NIM untuk Mulai'
+                  : !studentCheck.verified
+                  ? 'Menunggu Verifikasi Data Mahasiswa...'
+                  : scheduleState.loading
+                  ? 'Memuat Soal Ujian...'
                   : studentCheck.isRetake
-                  ? 'Mulai Kerjakan Retake Ujian (Ke-2)'
-                  : 'Mulai Kerjakan Ujian Sekarang'}
+                  ? '🚀 Mulai Kerjakan Retake Ujian (Ke-2)'
+                  : '🚀 Mulai Kerjakan Ujian Sekarang'}
               </button>
             </form>
           </div>

@@ -441,13 +441,63 @@ app.get('/v1/quiz/questions/:quizId', async (req, res) => {
   }
 });
 
+// Mengambil quiz yang sedang aktif / default untuk portal mahasiswa
+app.get('/v1/quiz/active', async (req, res) => {
+  try {
+    const actRes = await db.query(
+      `SELECT COALESCE(q.quiz_id, s.quiz_id) AS quiz_id,
+              COALESCE(s.duration_minutes, 60)::int AS duration_minutes,
+              COALESCE(s.max_violations, 3)::int AS max_violations,
+              COALESCE(s.is_active, TRUE) AS is_active,
+              s.start_time,
+              s.end_time,
+              COALESCE(q.total_questions, 0)::int AS total_questions
+       FROM quiz_settings s
+       FULL OUTER JOIN (
+         SELECT quiz_id, COUNT(*) AS total_questions
+         FROM quiz_questions
+         GROUP BY quiz_id
+       ) q ON q.quiz_id = s.quiz_id
+       WHERE COALESCE(s.is_active, TRUE) = TRUE
+       ORDER BY s.updated_at DESC NULLS LAST, COALESCE(q.quiz_id, s.quiz_id) DESC
+       LIMIT 1`
+    );
+    if (actRes.rows.length > 0 && actRes.rows[0].quiz_id) {
+      return res.json({ status: 'success', data: actRes.rows[0] });
+    }
+    const qq = await db.query(`SELECT DISTINCT quiz_id FROM quiz_questions ORDER BY quiz_id ASC LIMIT 1`);
+    const qId = (qq.rows.length > 0 && qq.rows[0].quiz_id) || '101';
+    return res.json({ status: 'success', data: { quiz_id: qId, duration_minutes: 60, max_violations: 3, is_active: true } });
+  } catch (err) {
+    return res.json({ status: 'success', data: { quiz_id: '101', duration_minutes: 60, max_violations: 3, is_active: true } });
+  }
+});
+
 // Verifikasi peserta kuis PPK, cegah duplikat sesi aktif, dan periksa jatah kesempatan (Max 2x, retake jika didiskualifikasi)
 app.get('/v1/quiz/check-student', async (req, res) => {
   const cleanNim = (req.query.nim || '').trim();
-  const cleanQuizId = (req.query.quizId || '').trim();
+  let cleanQuizId = (req.query.quizId || '').trim();
 
   if (!cleanNim) {
     return res.status(400).json({ status: 'error', message: 'NIM wajib diisi!' });
+  }
+
+  // Jika quizId tidak dioper di URL, deteksi kuis yang sedang aktif secara otomatis
+  if (!cleanQuizId) {
+    try {
+      const act = await db.query(
+        `SELECT quiz_id FROM quiz_settings WHERE is_active = true ORDER BY updated_at DESC LIMIT 1`
+      );
+      if (act.rows.length > 0) {
+        cleanQuizId = act.rows[0].quiz_id;
+      } else {
+        const qq = await db.query(`SELECT DISTINCT quiz_id FROM quiz_questions ORDER BY quiz_id ASC LIMIT 1`);
+        if (qq.rows.length > 0) cleanQuizId = qq.rows[0].quiz_id;
+        else cleanQuizId = '101';
+      }
+    } catch (_) {
+      cleanQuizId = '101';
+    }
   }
 
   try {
@@ -544,6 +594,7 @@ app.get('/v1/quiz/check-student', async (req, res) => {
     res.json({
       status: 'success',
       registered: true,
+      quizId: cleanQuizId,
       student,
       canStart,
       attemptNumber,
