@@ -551,7 +551,7 @@ export function AdminDashboardPage() {
               value={classFilter}
               onChange={(e) => setClassFilter(e.target.value)}
             >
-              <option value="ALL">🏫 Semua Kelas PPK</option>
+              <option value="ALL">🏫 Semua Kelas </option>
               <option value="A">Kelas A (50 mhs)</option>
               <option value="B">Kelas B (49 mhs)</option>
               <option value="C">Kelas C (51 mhs)</option>
@@ -566,7 +566,7 @@ export function AdminDashboardPage() {
                   onChange={(e) => setStatusFilter(e.target.value)}
                 >
                   <option value="ALL">📌 Semua Status Ujian</option>
-                  <option value="COMPLETED">✅ Selesai Normal / Manual</option>
+                  <option value="COMPLETED">✅ Selesai Mandiri</option>
                   <option value="DISQUALIFIED">❌ Diskualifikasi</option>
                   <option value="TIME_EXPIRED">⏰ Waktu Habis</option>
                 </select>

@@ -125,27 +125,32 @@ export const SubmissionRow = memo(function SubmissionRow({
           </div>
         </div>
       </td>
-      <td style={{ maxWidth: 320 }}>
+      <td style={{ width: 280, maxWidth: 320 }}>
         {entries.length === 0 ? (
           <span style={{ color: '#94a3b8', fontSize: '0.8rem' }}>
             Tidak ada jawaban
           </span>
         ) : (
-          <div>
-            <div className="answer-preview-box">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <div
+              className="answer-preview-box"
+              title="Klik untuk membuka baca jawaban lengkap"
+              onClick={() => onOpenAnswerModal(sub, entries)}
+            >
               {entries.slice(0, 2).map(([q, a], idx) => (
-                <div key={q}>
-                  <strong>Soal #{idx + 1}:</strong> {String(a)}
+                <div key={q} className="answer-preview-line">
+                  <strong style={{ color: '#0f172a' }}>Soal #{idx + 1}:</strong>{' '}
+                  {String(a || '').replace(/[\r\n]+/g, ' ')}
                 </div>
               ))}
             </div>
             <button
               type="button"
-              className="btn btn-outline btn-xs"
-              style={{ marginTop: 6 }}
+              className="btn btn-outline btn-xs btn-touchable"
+              style={{ width: '100%', justifyContent: 'center', fontSize: '0.74rem' }}
               onClick={() => onOpenAnswerModal(sub, entries)}
             >
-              📖 Baca Jawaban Lengkap ({entries.length} Soal)
+              📖 Baca Lengkap ({entries.length} Soal)
             </button>
           </div>
         )}
@@ -155,12 +160,17 @@ export const SubmissionRow = memo(function SubmissionRow({
           className={`badge ${
             sub.status === 'DISQUALIFIED'
               ? 'badge-danger'
-              : sub.grade !== null && sub.grade !== undefined
-              ? 'badge-success'
-              : 'badge-info'
+              : sub.status === 'TIME_EXPIRED'
+              ? 'badge-warn'
+              : 'badge-success'
           }`}
+          style={{ fontSize: '0.76rem', fontWeight: 700 }}
         >
-          {sub.status || 'COMPLETED'}
+          {sub.status === 'DISQUALIFIED'
+            ? '❌ Diskualifikasi'
+            : sub.status === 'TIME_EXPIRED'
+            ? '⏰ Waktu Habis'
+            : '✅ Selesai Mandiri'}
         </span>
         {sub.grade !== null && sub.grade !== undefined && (
           <div
