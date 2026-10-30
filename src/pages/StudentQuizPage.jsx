@@ -1062,18 +1062,18 @@ export function StudentQuizPage() {
                 {studentCheck.loading || scheduleState.loading
                   ? '⏳ Memeriksa Data & Sesi...'
                   : !nim.trim()
-                  ? '1. Masukkan NIM Terlebih Dahulu'
+                  ? 'Masukkan NIM Terlebih Dahulu'
                   : !studentCheck.verified
-                  ? 'NIM Tidak Terdaftar di Database PPK'
+                  ? 'NIM Tidak Terdaftar di Database'
                   : !quizId.trim()
-                  ? '2. Masukkan ID Quiz'
+                  ? 'Masukkan ID Quiz'
                   : !scheduleState.valid
                   ? 'ID Quiz Tidak Ditemukan di Database'
                   : !studentCheck.canStart
                   ? 'Sudah Pernah Mengerjakan Kuis Ini'
                   : studentCheck.isRetake
-                  ? '🚀 Mulai Kerjakan Retake Ujian (Ke-2)'
-                  : '🚀 Mulai Kerjakan Ujian Sekarang'}
+                  ? 'Mulai Kerjakan Retake Ujian (Ke-2)'
+                  : 'Mulai Kerjakan Ujian Sekarang'}
               </button>
             </form>
           </div>
