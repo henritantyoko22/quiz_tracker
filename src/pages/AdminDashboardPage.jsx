@@ -37,6 +37,7 @@ export function AdminDashboardPage() {
   // Filters & Sorting State
   const [searchQuery, setSearchQuery] = useState('');
   const [quizFilter, setQuizFilter] = useState('ALL');
+  const [classFilter, setClassFilter] = useState('ALL');
   const [statusFilter, setStatusFilter] = useState('ALL');
   const [gradeFilter, setGradeFilter] = useState('ALL');
   const [violationFilter, setViolationFilter] = useState('ALL');
@@ -207,6 +208,10 @@ export function AdminDashboardPage() {
       if (quizFilter !== 'ALL' && String(sub.quiz_id) !== String(quizFilter)) {
         return false;
       }
+      if (classFilter !== 'ALL') {
+        const subClass = String(sub.kelas || '').trim().toUpperCase();
+        if (subClass !== classFilter) return false;
+      }
       if (statusFilter !== 'ALL') {
         if (
           statusFilter === 'COMPLETED' &&
@@ -288,6 +293,7 @@ export function AdminDashboardPage() {
   }, [
     submissions,
     quizFilter,
+    classFilter,
     statusFilter,
     gradeFilter,
     violationFilter,
@@ -302,6 +308,10 @@ export function AdminDashboardPage() {
       if (quizFilter !== 'ALL' && String(s.quizId) !== String(quizFilter)) {
         return false;
       }
+      if (classFilter !== 'ALL') {
+        const sessClass = String(s.kelas || '').trim().toUpperCase();
+        if (sessClass !== classFilter) return false;
+      }
       if (q) {
         const matchName = (s.nama || s.studentName || '').toLowerCase().includes(q);
         const matchNim = (s.nim || '').toLowerCase().includes(q);
@@ -309,7 +319,7 @@ export function AdminDashboardPage() {
       }
       return true;
     });
-  }, [liveSessions, quizFilter, searchQuery]);
+  }, [liveSessions, quizFilter, classFilter, searchQuery]);
 
   // Summary Stats
   const stats = useMemo(() => {
@@ -337,8 +347,11 @@ export function AdminDashboardPage() {
       return;
     }
     const headers = [
+      'No.',
       'NIM',
       'Nama Mahasiswa',
+      'Kelas PPK',
+      'Attempt',
       'Quiz ID',
       'Pelanggaran',
       'Status',
@@ -346,9 +359,12 @@ export function AdminDashboardPage() {
       'Catatan Dosen',
       'Waktu Submit',
     ];
-    const rows = filteredSubmissions.map((s) => [
+    const rows = filteredSubmissions.map((s, idx) => [
+      idx + 1,
       `"${s.nim || ''}"`,
       `"${(s.nama || '').replace(/"/g, '""')}"`,
+      `"${s.kelas || '-'}"`,
+      s.attempt || 1,
       `"${s.quiz_id || ''}"`,
       s.violation_count || 0,
       `"${s.status || 'COMPLETED'}"`,
@@ -530,6 +546,18 @@ export function AdminDashboardPage() {
               ))}
             </select>
 
+            <select
+              className="filter-select"
+              value={classFilter}
+              onChange={(e) => setClassFilter(e.target.value)}
+            >
+              <option value="ALL">🏫 Semua Kelas PPK</option>
+              <option value="A">Kelas A (50 mhs)</option>
+              <option value="B">Kelas B (49 mhs)</option>
+              <option value="C">Kelas C (51 mhs)</option>
+              <option value="D">Kelas D (47 mhs)</option>
+            </select>
+
             {activeTab === 'SUBMISSIONS' && (
               <>
                 <select
@@ -571,6 +599,7 @@ export function AdminDashboardPage() {
 
             {(searchQuery ||
               quizFilter !== 'ALL' ||
+              classFilter !== 'ALL' ||
               statusFilter !== 'ALL' ||
               gradeFilter !== 'ALL' ||
               violationFilter !== 'ALL' ||
@@ -581,6 +610,7 @@ export function AdminDashboardPage() {
                 onClick={() => {
                   setSearchQuery('');
                   setQuizFilter('ALL');
+                  setClassFilter('ALL');
                   setStatusFilter('ALL');
                   setGradeFilter('ALL');
                   setViolationFilter('ALL');
@@ -767,6 +797,7 @@ export function AdminDashboardPage() {
             <table className="data-table">
               <thead>
                 <tr>
+                  <th style={{ width: 48, textAlign: 'center' }}>No.</th>
                   <th>Mahasiswa</th>
                   <th>Quiz ID</th>
                   <th>Status Real-Time</th>
@@ -779,14 +810,15 @@ export function AdminDashboardPage() {
               <tbody>
                 {filteredLiveSessions.length === 0 ? (
                   <tr>
-                    <td colSpan="7" className="empty-state">
+                    <td colSpan="8" className="empty-state">
                       Belum ada mahasiswa yang sedang aktif mengerjakan ujian pada filter ini.
                     </td>
                   </tr>
                 ) : (
-                  filteredLiveSessions.map((session) => (
+                  filteredLiveSessions.map((session, idx) => (
                     <LiveSessionRow
                       key={`${session.nim}_${session.quizId}`}
+                      index={idx}
                       session={session}
                       onViewDetail={(s) => setLiveDetailModal(s)}
                     />

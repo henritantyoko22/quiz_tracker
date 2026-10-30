@@ -201,6 +201,54 @@ async function initDbTables() {
       ALTER TABLE quiz_submissions 
       ADD COLUMN IF NOT EXISTS duration_seconds INT DEFAULT 0;
     `);
+    await db.query(`
+      ALTER TABLE quiz_submissions 
+      ADD COLUMN IF NOT EXISTS attempt INT DEFAULT 1;
+    `);
+    await db.query(`
+      ALTER TABLE quiz_submissions 
+      ADD COLUMN IF NOT EXISTS kelas VARCHAR(10);
+    `);
+
+    // 4. Buat tabel master data mahasiswa peserta PPK
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS quiz_students (
+        nim VARCHAR(30) PRIMARY KEY,
+        nama VARCHAR(150) NOT NULL,
+        kelas VARCHAR(10) NOT NULL,
+        prodi VARCHAR(100) DEFAULT 'Informatika S1',
+        status VARCHAR(30) DEFAULT 'BARU',
+        semester INT DEFAULT 5,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+
+    // 5. Auto-sync 197 data mahasiswa PPK jika tabel belum terisi lengkap
+    try {
+      const studentsPpk = require('./src/data/students_ppk.json');
+      const countRes = await db.query('SELECT COUNT(*) AS count FROM quiz_students');
+      if (parseInt(countRes.rows[0].count) < studentsPpk.length) {
+        for (const s of studentsPpk) {
+          await db.query(
+            `INSERT INTO quiz_students (nim, nama, kelas, prodi, status, semester)
+             VALUES ($1, $2, $3, $4, $5, $6)
+             ON CONFLICT (nim) DO UPDATE SET
+               nama = EXCLUDED.nama,
+               kelas = EXCLUDED.kelas,
+               prodi = EXCLUDED.prodi,
+               status = EXCLUDED.status,
+               semester = EXCLUDED.semester,
+               updated_at = NOW()`,
+            [s.nim, s.nama, s.kelas, s.prodi, s.status, s.semester]
+          );
+        }
+        console.log(`✅ Berhasil menyelaraskan ${studentsPpk.length} data peserta PPK ke database.`);
+      }
+    } catch (seedErr) {
+      console.warn('ℹ️ Seed mahasiswa DB:', seedErr.message);
+    }
+
     console.log('✅ Struktur database terverifikasi lengkap.');
   } catch (err) {
     console.warn('ℹ️ Inisialisasi tabel/kolom DB:', err.message);
@@ -393,9 +441,125 @@ app.get('/v1/quiz/questions/:quizId', async (req, res) => {
   }
 });
 
+// Verifikasi peserta kuis PPK, cegah duplikat sesi aktif, dan periksa jatah kesempatan (Max 2x, retake jika didiskualifikasi)
+app.get('/v1/quiz/check-student', async (req, res) => {
+  const cleanNim = (req.query.nim || '').trim();
+  const cleanQuizId = (req.query.quizId || '').trim();
+
+  if (!cleanNim) {
+    return res.status(400).json({ status: 'error', message: 'NIM wajib diisi!' });
+  }
+
+  try {
+    let student = null;
+    try {
+      const stuRes = await db.query(
+        'SELECT nim, nama, kelas, prodi, status, semester FROM quiz_students WHERE nim = $1',
+        [cleanNim]
+      );
+      if (stuRes.rows.length > 0) {
+        student = stuRes.rows[0];
+      }
+    } catch (_) {}
+
+    // Fallback dari memory file jika DB offline
+    if (!student) {
+      try {
+        const studentsPpk = require('./src/data/students_ppk.json');
+        student = studentsPpk.find(s => s.nim === cleanNim);
+      } catch (_) {}
+    }
+
+    if (!student) {
+      return res.status(404).json({
+        status: 'error',
+        registered: false,
+        message: `NIM "${cleanNim}" tidak terdaftar sebagai peserta mata kuliah Pengembangan Platform Khusus (PPK). Hubungi dosen/asisten jika ada kekeliruan.`
+      });
+    }
+
+    // 1. Cek sesi duplikat yang sedang aktif berjalan
+    if (cleanQuizId) {
+      const liveKey = getLiveSessionKey(cleanNim, cleanQuizId);
+      const activeSession = liveStudentSessions.get(liveKey);
+      if (
+        activeSession &&
+        activeSession.status === 'ACTIVE' &&
+        Date.now() - (activeSession.lastHeartbeat || 0) < 45000
+      ) {
+        return res.status(409).json({
+          status: 'error',
+          registered: true,
+          isDuplicateActive: true,
+          student,
+          message: `Sesi kuis #${cleanQuizId} untuk ${student.nama} (${student.nim}) sedang AKTIF berjalan di perangkat/tab lain! Tidak diperkenankan membuka sesi ganda secara bersamaan.`
+        });
+      }
+    }
+
+    // 2. Cek histori pengerjaan pada kuis ini (Aturan 2 Kesempatan: boleh retake jika didiskualifikasi)
+    let submissions = [];
+    if (cleanQuizId) {
+      try {
+        const subRes = await db.query(
+          `SELECT id, status, submitted_at, violation_count, attempt 
+           FROM quiz_submissions 
+           WHERE nim = $1 AND quiz_id = $2 
+           ORDER BY submitted_at ASC`,
+          [cleanNim, cleanQuizId]
+        );
+        submissions = subRes.rows;
+      } catch (_) {}
+    }
+
+    const attemptsCount = submissions.length;
+    let canStart = true;
+    let attemptNumber = attemptsCount + 1;
+    let isRetake = false;
+    let warningMessage = null;
+
+    if (attemptsCount === 0) {
+      canStart = true;
+      attemptNumber = 1;
+      isRetake = false;
+    } else if (attemptsCount === 1) {
+      const firstSub = submissions[0];
+      if (firstSub.status === 'DISQUALIFIED') {
+        canStart = true;
+        attemptNumber = 2;
+        isRetake = true;
+        warningMessage = '⚠️ KESEMPATAN KE-2 (RETAKE): Anda sebelumnya terdiskualifikasi pada percobaan pertama. Anda diberikan 1 kesempatan terakhir untuk mengerjakan kuis ini. Gunakan kesempatan ini dengan tertib!';
+      } else {
+        canStart = false;
+        attemptNumber = 1;
+        isRetake = false;
+        warningMessage = `Anda sudah menyelesaikan dan mengumpulkan kuis #${cleanQuizId} (Status: ${firstSub.status || 'SELESAI'}). Tidak dapat mengulang ujian.`;
+      }
+    } else {
+      canStart = false;
+      attemptNumber = attemptsCount;
+      warningMessage = `Batas maksimal pengerjaan (2 kesempatan) telah habis untuk kuis #${cleanQuizId}. Anda tidak dapat mengikuti kuis ini lagi.`;
+    }
+
+    res.json({
+      status: 'success',
+      registered: true,
+      student,
+      canStart,
+      attemptNumber,
+      maxAttempts: 2,
+      isRetake,
+      previousAttempts: attemptsCount,
+      warningMessage
+    });
+  } catch (err) {
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+});
+
 // Menyimpan jawaban kuis peserta (disertai laporan jumlah pelanggaran & telemetry)
 app.post('/v1/quiz/submit', async (req, res) => {
-  const { userId, nim, quizId, answers, status, violationCount, maxViolations, questionTimings, activityLog, durationSeconds } = req.body;
+  const { userId, nim, quizId, answers, status, violationCount, maxViolations, questionTimings, activityLog, durationSeconds, attempt, kelas } = req.body;
 
   if (!userId || !nim || userId.trim() === '' || nim.trim() === '' || userId === '-' || nim === '-') {
     return res.status(400).json({
@@ -409,30 +573,40 @@ app.post('/v1/quiz/submit', async (req, res) => {
   const durSec = parseInt(durationSeconds) >= 0 ? parseInt(durationSeconds) : 0;
   const qTimingsJson = questionTimings ? JSON.stringify(questionTimings) : null;
   const actLogJson = activityLog ? JSON.stringify(activityLog) : null;
+  const attemptNum = parseInt(attempt) > 0 ? parseInt(attempt) : 1;
+
+  // Dapatkan kelas mahasiswa jika tidak dikirim dari client
+  let studentKelas = kelas;
+  if (!studentKelas) {
+    try {
+      const stu = await db.query('SELECT kelas FROM quiz_students WHERE nim = $1', [nim.trim()]);
+      if (stu.rows.length > 0) studentKelas = stu.rows[0].kelas;
+    } catch (_) {}
+  }
 
   try {
     let result;
     try {
       result = await db.query(
-        `INSERT INTO quiz_submissions (user_id, nim, quiz_id, answers, status, violation_count, max_violations, question_timings, activity_log, duration_seconds, submitted_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
+        `INSERT INTO quiz_submissions (user_id, nim, quiz_id, answers, status, violation_count, max_violations, question_timings, activity_log, duration_seconds, attempt, kelas, submitted_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())
          RETURNING *`,
-        [userId, nim, quizId, JSON.stringify(answers), status || 'COMPLETED', vCount, maxV, qTimingsJson, actLogJson, durSec]
+        [userId, nim, quizId, JSON.stringify(answers), status || 'COMPLETED', vCount, maxV, qTimingsJson, actLogJson, durSec, attemptNum, studentKelas || '-']
       );
     } catch (insertColErr) {
       try {
+        result = await db.query(
+          `INSERT INTO quiz_submissions (user_id, nim, quiz_id, answers, status, violation_count, max_violations, question_timings, activity_log, duration_seconds, submitted_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
+           RETURNING *`,
+          [userId, nim, quizId, JSON.stringify(answers), status || 'COMPLETED', vCount, maxV, qTimingsJson, actLogJson, durSec]
+        );
+      } catch (insertOldErr) {
         result = await db.query(
           `INSERT INTO quiz_submissions (user_id, nim, quiz_id, answers, status, violation_count, max_violations, submitted_at)
            VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
            RETURNING *`,
           [userId, nim, quizId, JSON.stringify(answers), status || 'COMPLETED', vCount, maxV]
-        );
-      } catch (insertOldErr) {
-        result = await db.query(
-          `INSERT INTO quiz_submissions (user_id, nim, quiz_id, answers, status, submitted_at)
-           VALUES ($1, $2, $3, $4, $5, NOW())
-           RETURNING *`,
-          [userId, nim, quizId, JSON.stringify(answers), status || 'COMPLETED']
         );
       }
     }
@@ -448,6 +622,8 @@ app.post('/v1/quiz/submit', async (req, res) => {
         nama: userId || nim,
         nim: nim.trim(),
         quizId: quizId.trim(),
+        kelas: studentKelas || '-',
+        attempt: attemptNum,
         startedAt: nowTs - (durSec ? durSec * 1000 : 60000),
         startedAtISO: new Date(nowTs - (durSec ? durSec * 1000 : 60000)).toISOString(),
         currentQuestionIndex: 0,
@@ -460,6 +636,8 @@ app.post('/v1/quiz/submit', async (req, res) => {
     } else {
       if (questionTimings) liveSession.questionTimings = questionTimings;
       if (activityLog) liveSession.activityLog = activityLog;
+      if (studentKelas) liveSession.kelas = studentKelas;
+      liveSession.attempt = attemptNum;
     }
     liveSession.status = finalLiveStatus;
     liveSession.finishedAt = nowTs;
@@ -494,20 +672,48 @@ app.post('/v1/violations', async (req, res) => {
 // -------------------------------------------------------------
 
 // Daftarkan sesi live peserta saat mulai mengerjakan (public, tidak perlu auth)
-app.post('/v1/quiz/live/session', (req, res) => {
-  const { userId, nim, quizId, totalQuestions, questionTexts } = req.body;
+app.post('/v1/quiz/live/session', async (req, res) => {
+  const { userId, nim, quizId, totalQuestions, questionTexts, kelas, attempt, isRetake } = req.body;
   if (!nim || !quizId) {
     return res.status(400).json({ status: 'error', message: 'nim dan quizId wajib diisi.' });
   }
 
-  const key = getLiveSessionKey(nim, quizId);
+  const cleanNim = nim.trim();
+  const cleanQuizId = quizId.trim();
+  const key = getLiveSessionKey(cleanNim, cleanQuizId);
   const now = Date.now();
+  const existing = liveStudentSessions.get(key);
+
+  // Cegah duplikat sesi aktif (jika sedang aktif dan heartbeat < 45 detik)
+  // Kecuali jika isRetake = true (mahasiswa baru saja diizinkan mulai sesi retake ke-2)
+  if (
+    !isRetake &&
+    existing &&
+    existing.status === 'ACTIVE' &&
+    now - (existing.lastHeartbeat || 0) < 45000
+  ) {
+    return res.status(409).json({
+      status: 'error',
+      message: 'Sesi kuis sedang berjalan aktif di perangkat/tab lain! Tidak diperbolehkan membuka sesi ganda secara bersamaan.'
+    });
+  }
+
+  // Ambil kelas resmi mahasiswa
+  let studentKelas = kelas;
+  if (!studentKelas) {
+    try {
+      const stuRes = await db.query('SELECT kelas FROM quiz_students WHERE nim = $1', [cleanNim]);
+      if (stuRes.rows.length > 0) studentKelas = stuRes.rows[0].kelas;
+    } catch (_) {}
+  }
 
   liveStudentSessions.set(key, {
     key,
-    nama: userId || nim,
-    nim: nim.trim(),
-    quizId: quizId.trim(),
+    nama: userId || cleanNim,
+    nim: cleanNim,
+    quizId: cleanQuizId,
+    kelas: studentKelas || '-',
+    attempt: Number(attempt) || 1,
     totalQuestions: totalQuestions || 0,
     questionTexts: questionTexts || [],
     startedAt: now,
@@ -523,8 +729,8 @@ app.post('/v1/quiz/live/session', (req, res) => {
     remainingSeconds: null
   });
 
-  console.log(`🟢 Sesi live dimulai: ${nim} | Kuis: ${quizId}`);
-  res.json({ status: 'success', message: 'Sesi live terdaftar.', key });
+  console.log(`🟢 Sesi live dimulai: ${cleanNim} (${studentKelas || 'PPK'}) | Kuis: ${cleanQuizId} | Attempt: ${attempt || 1}`);
+  res.json({ status: 'success', message: 'Sesi live terdaftar.', key, kelas: studentKelas, attempt: attempt || 1 });
 });
 
 // Update heartbeat / data real-time dari peserta
@@ -1171,10 +1377,14 @@ app.get('/v1/admin/submissions', authenticate, async (req, res) => {
         s.question_timings,
         s.activity_log,
         COALESCE(s.duration_seconds, 0) AS duration_seconds,
+        COALESCE(s.attempt, 1) AS attempt,
+        COALESCE(s.kelas, stu.kelas, '-') AS kelas,
+        stu.prodi,
         GREATEST(COALESCE(s.violation_count, 0), COALESCE(v.total_violations, 0)) AS violation_count,
         COALESCE(s.max_violations, 3) AS max_violations,
         COALESCE(v.violation_breakdown, '-') AS violation_summary
       FROM quiz_submissions s
+      LEFT JOIN quiz_students stu ON stu.nim = s.nim
       LEFT JOIN (
         SELECT 
           user_id,

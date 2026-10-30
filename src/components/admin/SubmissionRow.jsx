@@ -48,12 +48,30 @@ export const SubmissionRow = memo(function SubmissionRow({
       <td>
         <div style={{ fontWeight: 700, color: '#0f172a' }}>{sub.nama || '-'}</div>
         <div style={{ fontSize: '0.75rem', color: '#64748b' }}>NIM: {sub.nim || '-'}</div>
-        <span
-          className="badge badge-info"
-          style={{ marginTop: 4, display: 'inline-block' }}
-        >
-          Quiz #{sub.quiz_id}
-        </span>
+        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 4 }}>
+          {sub.kelas && sub.kelas !== '-' && (
+            <span
+              className="badge badge-success"
+              style={{ fontSize: '0.7rem', fontWeight: 800 }}
+            >
+              Kelas {sub.kelas}
+            </span>
+          )}
+          {sub.attempt && Number(sub.attempt) > 1 && (
+            <span
+              className="badge badge-warning"
+              style={{ fontSize: '0.7rem', fontWeight: 800 }}
+            >
+              🔁 Retake (Ke-{sub.attempt})
+            </span>
+          )}
+          <span
+            className="badge badge-info"
+            style={{ fontSize: '0.7rem' }}
+          >
+            Quiz #{sub.quiz_id}
+          </span>
+        </div>
       </td>
       <td>
         <div style={{ fontSize: '0.78rem', fontWeight: 600, color: '#1e293b' }}>

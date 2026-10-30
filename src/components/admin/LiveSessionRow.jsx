@@ -1,7 +1,7 @@
 import React, { memo } from 'react';
 import { formatDuration } from '../../services/api.js';
 
-export const LiveSessionRow = memo(function LiveSessionRow({ session, onViewDetail }) {
+export const LiveSessionRow = memo(function LiveSessionRow({ index, session, onViewDetail }) {
   const isStale = Date.now() - (session.lastHeartbeat || 0) > 20000;
   const isOnline = session.status === 'ACTIVE' && !isStale;
 
@@ -31,11 +31,40 @@ export const LiveSessionRow = memo(function LiveSessionRow({ session, onViewDeta
 
   return (
     <tr onClick={() => onViewDetail(session)} style={{ cursor: 'pointer' }}>
+      <td
+        style={{
+          width: 48,
+          textAlign: 'center',
+          fontWeight: 700,
+          color: '#64748b',
+          fontSize: '0.84rem',
+        }}
+      >
+        {typeof index === 'number' ? index + 1 : '-'}
+      </td>
       <td>
         <div style={{ fontWeight: 700, color: '#0f172a' }}>
           {session.nama || session.studentName || '-'}
         </div>
         <div style={{ fontSize: '0.75rem', color: '#64748b' }}>NIM: {session.nim}</div>
+        <div style={{ display: 'flex', gap: 4, marginTop: 4, flexWrap: 'wrap' }}>
+          {session.kelas && session.kelas !== '-' && (
+            <span
+              className="badge badge-success"
+              style={{ fontSize: '0.68rem', fontWeight: 800 }}
+            >
+              Kelas {session.kelas}
+            </span>
+          )}
+          {session.attempt && Number(session.attempt) > 1 && (
+            <span
+              className="badge badge-warning"
+              style={{ fontSize: '0.68rem', fontWeight: 800 }}
+            >
+              🔁 Retake {session.attempt}
+            </span>
+          )}
+        </div>
       </td>
       <td>
         <span className="badge badge-info">Quiz #{session.quizId}</span>
