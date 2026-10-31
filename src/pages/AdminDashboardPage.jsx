@@ -60,13 +60,19 @@ export function AdminDashboardPage() {
   }, []);
 
   const handleLogout = useCallback(() => {
+    try {
+      fetch(`${API_BASE}/v1/admin/logout`, {
+        method: 'POST',
+        headers: getAuthHeaders(token),
+      }).catch(() => {});
+    } catch (_) {}
     localStorage.removeItem('adminToken');
     localStorage.removeItem('adminRole');
     localStorage.removeItem('adminUser');
     setToken('');
-    setRole('');
+    setRole('DOSEN');
     setUsername('');
-  }, []);
+  }, [token]);
 
   const handleLogin = async (e) => {
     e.preventDefault();

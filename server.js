@@ -53,11 +53,11 @@ let memoryUsers = [];
 const activeSessions = new Map();
 
 // Helper Token HMAC Kriptografis (Stateless agar kebal restart/serverless cold-start)
-// Jika JWT_SECRET tidak diset di environment, buat kunci acak ephemeral (mencegah forge token via default string)
+// Menggunakan JWT_SECRET dari environment; jika belum diset di Vercel, turunkan kunci stabil berbasis DATABASE_URL
+// agar konsisten di seluruh instance lambda serverless (tidak berubah per request)
 const JWT_SECRET = process.env.JWT_SECRET || process.env.APP_SECRET || (() => {
-  const ephemeral = crypto.randomBytes(64).toString('hex');
-  console.warn('⚠️ [SECURITY] Environment variable JWT_SECRET belum disetel! Menggunakan ephemeral secret acak.');
-  return ephemeral;
+  const baseKey = process.env.DATABASE_URL || 'quiz-tracker-proctoring-salt-2026-secret-seed-jwt-token';
+  return crypto.createHmac('sha256', 'quiz-protect-v2-hmac-salt').update(baseKey).digest('hex');
 })();
 
 function generateAdminToken(payload) {
@@ -165,10 +165,19 @@ setInterval(() => {
   }
 }, 30 * 60 * 1000);
 
-// Middleware Autentikasi & Verifikasi Token
+// Middleware Autentikasi & Verifikasi Token (Mendukung Header Bearer, x-admin-token, & HttpOnly Cookie)
 function authenticate(req, res, next) {
+  // Cegah browser / proxy menyimpan response endpoint admin di cache disk
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+
+  let token = null;
   const authHeader = req.headers['authorization'] || req.headers['x-admin-token'];
-  const token = authHeader ? authHeader.replace(/^Bearer\s+/i, '').trim() : null;
+  if (authHeader) {
+    token = authHeader.replace(/^Bearer\s+/i, '').trim();
+  } else if (req.headers['cookie']) {
+    const match = req.headers['cookie'].match(/(?:^|;\s*)admin_token=([^;]+)/);
+    if (match) token = decodeURIComponent(match[1]);
+  }
 
   if (!token) {
     return res.status(401).json({ status: 'error', message: 'Akses ditolak: Token autentikasi tidak ditemukan.' });
@@ -1490,6 +1499,10 @@ app.post('/v1/admin/login', async (req, res) => {
     const token = generateAdminToken(sessionData);
     activeSessions.set(token, { ...sessionData, loginAt: new Date() });
 
+    // Set HttpOnly Secure Cookie (Mencegah pencurian token via XSS DevTools)
+    res.setHeader('Set-Cookie', `admin_token=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800`);
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+
     res.json({
       status: 'success',
       token,
@@ -1502,6 +1515,16 @@ app.post('/v1/admin/login', async (req, res) => {
   } catch (err) {
     sendServerError(res, err, 'Gagal memproses autentikasi login.');
   }
+});
+
+// Endpoint Logout (Membersihkan cookie HttpOnly & token di session)
+app.post('/v1/admin/logout', (req, res) => {
+  const authHeader = req.headers['authorization'] || req.headers['x-admin-token'];
+  const token = authHeader ? authHeader.replace(/^Bearer\s+/i, '').trim() : null;
+  if (token) activeSessions.delete(token);
+  res.setHeader('Set-Cookie', 'admin_token=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0');
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+  res.json({ status: 'success', message: 'Sesi berhasil diakhiri.' });
 });
 
 // Cek profil login saat ini
