@@ -205,87 +205,6 @@ export function AdminDashboardPage() {
     [token, showToast]
   );
 
-  const handleAutoGradeSingle = useCallback(
-    async (submissionId) => {
-      showToast('⏳ Mengevaluasi jawaban dengan Gemini AI...', 'info');
-      try {
-        const res = await fetch(`${API_BASE}/v1/admin/submissions/auto-grade`, {
-          method: 'POST',
-          headers: getAuthHeaders(token),
-          body: JSON.stringify({ submissionId }),
-        });
-        const data = await res.json();
-        if (res.ok && data.status === 'success') {
-          showToast(`✅ ${data.message}`, 'success');
-          setSubmissions((prev) =>
-            prev.map((item) =>
-              item.id === submissionId
-                ? {
-                    ...item,
-                    grade: data.data?.grade ?? item.grade,
-                    feedback: data.data?.feedback ?? item.feedback,
-                  }
-                : item
-            )
-          );
-        } else {
-          showToast(data.message || 'Gagal menjalankan Auto-Grading AI.', 'error');
-        }
-      } catch (err) {
-        showToast('Kesalahan koneksi AI: ' + err.message, 'error');
-      }
-    },
-    [token, showToast]
-  );
-
-  const handleAutoGradeBatch = useCallback(async () => {
-    if (quizFilter === 'ALL') {
-      showToast(
-        'Pilih salah satu Quiz ID pada filter terlebih dahulu untuk Auto-Grade massal.',
-        'error'
-      );
-      return;
-    }
-
-    const ungradeds = filteredSubmissions.filter(
-      (s) => s.grade === null || s.grade === undefined || s.grade === ''
-    );
-    if (ungradeds.length === 0) {
-      showToast(
-        `Semua mahasiswa pada Quiz #${quizFilter} sudah memiliki nilai.`,
-        'info'
-      );
-      return;
-    }
-
-    const confirmMsg = `Jalankan Auto-Grading Gemini AI untuk ${ungradeds.length} submission yang belum dinilai pada Quiz #${quizFilter}?\nNilai dan catatan dosen akan otomatis terisi berdasarkan rubrik dosen.`;
-    if (!window.confirm(confirmMsg)) return;
-
-    setAutoGradeLoading(true);
-    showToast(
-      `⏳ Sedang mengevaluasi ${ungradeds.length} jawaban dengan Gemini AI...`,
-      'info'
-    );
-    try {
-      const res = await fetch(`${API_BASE}/v1/admin/submissions/auto-grade`, {
-        method: 'POST',
-        headers: getAuthHeaders(token),
-        body: JSON.stringify({ quizId: quizFilter, ungradeOnly: true }),
-      });
-      const data = await res.json();
-      if (res.ok && data.status === 'success') {
-        showToast(`✅ ${data.message}`, 'success');
-        fetchSubmissions();
-      } else {
-        showToast(data.message || 'Gagal menjalankan Auto-Grading.', 'error');
-      }
-    } catch (err) {
-      showToast('Kesalahan koneksi AI: ' + err.message, 'error');
-    } finally {
-      setAutoGradeLoading(false);
-    }
-  }, [quizFilter, filteredSubmissions, token, fetchSubmissions, showToast]);
-
   // Memoized Filtered Submissions
   const filteredSubmissions = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -415,6 +334,87 @@ export function AdminDashboardPage() {
     ).length;
     return { total, gradedCount: graded.length, avg, activeOnline };
   }, [filteredSubmissions, liveSessions]);
+
+  const handleAutoGradeSingle = useCallback(
+    async (submissionId) => {
+      showToast('⏳ Mengevaluasi jawaban dengan Gemini AI...', 'info');
+      try {
+        const res = await fetch(`${API_BASE}/v1/admin/submissions/auto-grade`, {
+          method: 'POST',
+          headers: getAuthHeaders(token),
+          body: JSON.stringify({ submissionId }),
+        });
+        const data = await res.json();
+        if (res.ok && data.status === 'success') {
+          showToast(`✅ ${data.message}`, 'success');
+          setSubmissions((prev) =>
+            prev.map((item) =>
+              item.id === submissionId
+                ? {
+                    ...item,
+                    grade: data.data?.grade ?? item.grade,
+                    feedback: data.data?.feedback ?? item.feedback,
+                  }
+                : item
+            )
+          );
+        } else {
+          showToast(data.message || 'Gagal menjalankan Auto-Grading AI.', 'error');
+        }
+      } catch (err) {
+        showToast('Kesalahan koneksi AI: ' + err.message, 'error');
+      }
+    },
+    [token, showToast]
+  );
+
+  const handleAutoGradeBatch = useCallback(async () => {
+    if (quizFilter === 'ALL') {
+      showToast(
+        'Pilih salah satu Quiz ID pada filter terlebih dahulu untuk Auto-Grade massal.',
+        'error'
+      );
+      return;
+    }
+
+    const ungradeds = filteredSubmissions.filter(
+      (s) => s.grade === null || s.grade === undefined || s.grade === ''
+    );
+    if (ungradeds.length === 0) {
+      showToast(
+        `Semua mahasiswa pada Quiz #${quizFilter} sudah memiliki nilai.`,
+        'info'
+      );
+      return;
+    }
+
+    const confirmMsg = `Jalankan Auto-Grading Gemini AI untuk ${ungradeds.length} submission yang belum dinilai pada Quiz #${quizFilter}?\nNilai dan catatan dosen akan otomatis terisi berdasarkan rubrik dosen.`;
+    if (!window.confirm(confirmMsg)) return;
+
+    setAutoGradeLoading(true);
+    showToast(
+      `⏳ Sedang mengevaluasi ${ungradeds.length} jawaban dengan Gemini AI...`,
+      'info'
+    );
+    try {
+      const res = await fetch(`${API_BASE}/v1/admin/submissions/auto-grade`, {
+        method: 'POST',
+        headers: getAuthHeaders(token),
+        body: JSON.stringify({ quizId: quizFilter, ungradeOnly: true }),
+      });
+      const data = await res.json();
+      if (res.ok && data.status === 'success') {
+        showToast(`✅ ${data.message}`, 'success');
+        fetchSubmissions();
+      } else {
+        showToast(data.message || 'Gagal menjalankan Auto-Grading.', 'error');
+      }
+    } catch (err) {
+      showToast('Kesalahan koneksi AI: ' + err.message, 'error');
+    } finally {
+      setAutoGradeLoading(false);
+    }
+  }, [quizFilter, filteredSubmissions, token, fetchSubmissions, showToast]);
 
   const handleExportCSV = async () => {
     if (filteredSubmissions.length === 0) {
