@@ -1846,70 +1846,63 @@ app.post('/v1/admin/submissions/import-grades', authenticate, requireRole('SUPER
   });
 });
 
-// Helper Pemanggilan Gemini API dengan Auto-Fallback Model & Endpoint (Menghindari 404 pada model deprecated)
-async function callGeminiWithFallback(apiKey, requestedModel, promptText) {
-  const cleanReq = String(requestedModel || '').replace(/^models\//, '').trim();
-  const candidates = [
-    cleanReq,
-    'gemini-2.5-flash',
-    'gemini-2.0-flash',
-    'gemini-1.5-flash-latest',
-    'gemini-1.5-flash',
-    'gemini-1.5-pro',
-    'gemini-2.0-flash-exp'
-  ].filter(Boolean);
+// Helper Pemanggilan Gemini API dengan Penanganan Model & Error Transparan
+async function callGeminiWithFallback(rawApiKey, requestedModel, promptText) {
+  const apiKey = String(rawApiKey || '').replace(/^['"]+|['"]+$/g, '').trim();
+  if (!apiKey) {
+    throw new Error('Gemini API Key kosong atau belum dikonfigurasi.');
+  }
 
-  const uniqueCandidates = [...new Set(candidates)];
-  let lastError = null;
+  const cleanReq = String(requestedModel || '').replace(/^models\//, '').trim() || 'gemini-1.5-flash';
 
-  for (const modelCandidate of uniqueCandidates) {
-    for (const apiVer of ['v1beta', 'v1']) {
-      const geminiUrl = `https://generativelanguage.googleapis.com/${apiVer}/models/${encodeURIComponent(modelCandidate)}:generateContent?key=${encodeURIComponent(apiKey)}`;
-      try {
-        const response = await fetch(geminiUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: promptText }] }],
-            generationConfig: {
-              temperature: 0.2,
-              responseMimeType: 'application/json'
-            }
-          })
-        });
-
-        if (response.ok) {
-          const geminiData = await response.json();
-          const rawText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || '';
-          if (rawText) {
-            return { rawText, activeModel: modelCandidate };
+  // 1. Coba panggil model yang diminta dosen (pada v1beta dan v1)
+  let requestedModelError = null;
+  for (const apiVer of ['v1beta', 'v1']) {
+    const geminiUrl = `https://generativelanguage.googleapis.com/${apiVer}/models/${encodeURIComponent(cleanReq)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+    try {
+      const response = await fetch(geminiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: promptText }] }],
+          generationConfig: {
+            temperature: 0.2,
+            responseMimeType: 'application/json'
           }
-        }
+        })
+      });
 
-        const errBody = await response.text();
-        let parsedErrMsg = '';
-        try {
-          const parsedErr = JSON.parse(errBody);
-          parsedErrMsg = parsedErr?.error?.message || errBody;
-        } catch (_) {
-          parsedErrMsg = errBody.slice(0, 150);
+      if (response.ok) {
+        const geminiData = await response.json();
+        const rawText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        if (rawText) {
+          return { rawText, activeModel: cleanReq };
         }
-        lastError = new Error(`Google Gemini API Error (${response.status}): ${parsedErrMsg}`);
+      }
 
-        // Jika bukan 404 (misal 400 Bad Request, 403 Forbidden, 429 Quota Exceeded), langsung throw
-        if (response.status !== 404) {
-          throw lastError;
-        }
-      } catch (reqErr) {
-        lastError = reqErr;
-        if (reqErr.message && !reqErr.message.includes('404')) {
-          throw reqErr;
-        }
+      const errBody = await response.text();
+      let parsedErrMsg = '';
+      try {
+        const parsedErr = JSON.parse(errBody);
+        parsedErrMsg = parsedErr?.error?.message || errBody;
+      } catch (_) {
+        parsedErrMsg = errBody.slice(0, 150);
+      }
+      requestedModelError = new Error(`Google Gemini API Error (${response.status}) [${cleanReq}]: ${parsedErrMsg}`);
+
+      // Jika bukan 404 (misal 400 Bad Request, 403 Forbidden, 429 Quota Exceeded), langsung lempar error
+      if (response.status !== 404) {
+        throw requestedModelError;
+      }
+    } catch (reqErr) {
+      requestedModelError = reqErr;
+      if (reqErr.message && !reqErr.message.includes('404')) {
+        throw reqErr;
       }
     }
   }
 
-  // Jika semua model di atas 404, tanyakan langsung ke ListModels untuk mendapatkan model yang aktif pada API key
+  // 2. Jika model yang diminta 404 (tidak ditemukan), tanyakan ke ListModels untuk cek model yang aktif di akun ini
   try {
     const listRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey)}`);
     if (listRes.ok) {
@@ -1919,8 +1912,15 @@ async function callGeminiWithFallback(apiKey, requestedModel, promptText) {
         .map(m => m.name.replace(/^models\//, ''));
 
       if (availableModels.length > 0) {
-        const preferred = availableModels.find(m => m.includes('flash')) || availableModels[0];
-        const dynamicUrl = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(preferred)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+        // Pilih model alternatif terdekat yang aktif
+        const fallbackModel =
+          availableModels.find(m => m.includes('1.5-flash')) ||
+          availableModels.find(m => m.includes('2.5-flash')) ||
+          availableModels.find(m => m.includes('2.0-flash')) ||
+          availableModels.find(m => m.includes('flash')) ||
+          availableModels[0];
+
+        const dynamicUrl = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(fallbackModel)}:generateContent?key=${encodeURIComponent(apiKey)}`;
         const dynamicRes = await fetch(dynamicUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -1936,13 +1936,18 @@ async function callGeminiWithFallback(apiKey, requestedModel, promptText) {
         if (dynamicRes.ok) {
           const dynamicData = await dynamicRes.json();
           const rawText = dynamicData.candidates?.[0]?.content?.parts?.[0]?.text || '';
-          if (rawText) return { rawText, activeModel: preferred };
+          if (rawText) return { rawText, activeModel: fallbackModel };
         }
       }
     }
   } catch (_) {}
 
-  throw lastError || new Error('Tidak ada model Gemini yang mendukung generateContent pada API Key Anda.');
+  // Selalu tampilkan error yang konsisten dengan model yang dipilih dosen
+  if (requestedModelError) {
+    throw new Error(`${requestedModelError.message}\nPetunjuk: Periksa apakah API Key dibuat di Google AI Studio (aistudio.google.com) dan 'Generative Language API' aktif tanpa restriksi.`);
+  }
+
+  throw new Error(`Model '${cleanReq}' tidak tersedia pada API Key Anda.`);
 }
 
 // Helper Evaluasi Jawaban Mahasiswa Menggunakan Google Gemini AI
