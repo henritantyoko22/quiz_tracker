@@ -40,9 +40,9 @@ export function AdminDashboardPage() {
   const [quizFilter, setQuizFilter] = useState('ALL');
   const [classFilter, setClassFilter] = useState('ALL');
   const [statusFilter, setStatusFilter] = useState('ALL');
-  const [gradeFilter, setGradeFilter] = useState('ALL');
   const [violationFilter, setViolationFilter] = useState('ALL');
   const [sortKey, setSortKey] = useState('submitted_at-desc');
+  const [autoGradeLoading, setAutoGradeLoading] = useState(false);
 
   // Modals & Toasts
   const [answerModal, setAnswerModal] = useState(null);
@@ -205,6 +205,87 @@ export function AdminDashboardPage() {
     [token, showToast]
   );
 
+  const handleAutoGradeSingle = useCallback(
+    async (submissionId) => {
+      showToast('⏳ Mengevaluasi jawaban dengan Gemini AI...', 'info');
+      try {
+        const res = await fetch(`${API_BASE}/v1/admin/submissions/auto-grade`, {
+          method: 'POST',
+          headers: getAuthHeaders(token),
+          body: JSON.stringify({ submissionId }),
+        });
+        const data = await res.json();
+        if (res.ok && data.status === 'success') {
+          showToast(`✅ ${data.message}`, 'success');
+          setSubmissions((prev) =>
+            prev.map((item) =>
+              item.id === submissionId
+                ? {
+                    ...item,
+                    grade: data.data?.grade ?? item.grade,
+                    feedback: data.data?.feedback ?? item.feedback,
+                  }
+                : item
+            )
+          );
+        } else {
+          showToast(data.message || 'Gagal menjalankan Auto-Grading AI.', 'error');
+        }
+      } catch (err) {
+        showToast('Kesalahan koneksi AI: ' + err.message, 'error');
+      }
+    },
+    [token, showToast]
+  );
+
+  const handleAutoGradeBatch = useCallback(async () => {
+    if (quizFilter === 'ALL') {
+      showToast(
+        'Pilih salah satu Quiz ID pada filter terlebih dahulu untuk Auto-Grade massal.',
+        'error'
+      );
+      return;
+    }
+
+    const ungradeds = filteredSubmissions.filter(
+      (s) => s.grade === null || s.grade === undefined || s.grade === ''
+    );
+    if (ungradeds.length === 0) {
+      showToast(
+        `Semua mahasiswa pada Quiz #${quizFilter} sudah memiliki nilai.`,
+        'info'
+      );
+      return;
+    }
+
+    const confirmMsg = `Jalankan Auto-Grading Gemini AI untuk ${ungradeds.length} submission yang belum dinilai pada Quiz #${quizFilter}?\nNilai dan catatan dosen akan otomatis terisi berdasarkan rubrik dosen.`;
+    if (!window.confirm(confirmMsg)) return;
+
+    setAutoGradeLoading(true);
+    showToast(
+      `⏳ Sedang mengevaluasi ${ungradeds.length} jawaban dengan Gemini AI...`,
+      'info'
+    );
+    try {
+      const res = await fetch(`${API_BASE}/v1/admin/submissions/auto-grade`, {
+        method: 'POST',
+        headers: getAuthHeaders(token),
+        body: JSON.stringify({ quizId: quizFilter, ungradeOnly: true }),
+      });
+      const data = await res.json();
+      if (res.ok && data.status === 'success') {
+        showToast(`✅ ${data.message}`, 'success');
+        fetchSubmissions();
+      } else {
+        showToast(data.message || 'Gagal menjalankan Auto-Grading.', 'error');
+      }
+    } catch (err) {
+      showToast('Kesalahan koneksi AI: ' + err.message, 'error');
+    } finally {
+      setAutoGradeLoading(false);
+    }
+  }, [quizFilter, filteredSubmissions, token, fetchSubmissions, showToast]);
+
   // Memoized Filtered Submissions
   const filteredSubmissions = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -231,15 +312,6 @@ export function AdminDashboardPage() {
         if (statusFilter === 'TIME_EXPIRED' && sub.status !== 'TIME_EXPIRED') {
           return false;
         }
-      }
-      if (gradeFilter !== 'ALL') {
-        const hasGrade = sub.grade !== null && sub.grade !== undefined && sub.grade !== '';
-        const gNum = hasGrade ? Number(sub.grade) : null;
-        if (gradeFilter === 'GRADED' && !hasGrade) return false;
-        if (gradeFilter === 'UNGRADED' && hasGrade) return false;
-        if (gradeFilter === 'A' && (!hasGrade || gNum < 80)) return false;
-        if (gradeFilter === 'B' && (!hasGrade || gNum < 60 || gNum >= 80)) return false;
-        if (gradeFilter === 'C' && (!hasGrade || gNum >= 60)) return false;
       }
       if (violationFilter !== 'ALL') {
         const v = Number(sub.violation_count) || 0;
@@ -268,6 +340,10 @@ export function AdminDashboardPage() {
           return new Date(a.submitted_at || 0) - new Date(b.submitted_at || 0);
         case 'submitted_at-desc':
           return new Date(b.submitted_at || 0) - new Date(a.submitted_at || 0);
+        case 'grade-desc':
+          return (Number(b.grade) || 0) - (Number(a.grade) || 0);
+        case 'grade-asc':
+          return (Number(a.grade) || 0) - (Number(b.grade) || 0);
         case 'nama-asc':
           return (a.nama || '').localeCompare(b.nama || '');
         case 'nama-desc':
@@ -280,14 +356,10 @@ export function AdminDashboardPage() {
           return String(b.nim || '').localeCompare(String(a.nim || ''), undefined, {
             numeric: true,
           });
-        case 'grade-asc':
-          return (Number(a.grade) || 0) - (Number(b.grade) || 0);
-        case 'grade-desc':
-          return (Number(b.grade) || 0) - (Number(a.grade) || 0);
-        case 'violation_count-asc':
-          return (Number(a.violation_count) || 0) - (Number(b.violation_count) || 0);
         case 'violation_count-desc':
           return (Number(b.violation_count) || 0) - (Number(a.violation_count) || 0);
+        case 'violation_count-asc':
+          return (Number(a.violation_count) || 0) - (Number(b.violation_count) || 0);
         default:
           return new Date(b.submitted_at || 0) - new Date(a.submitted_at || 0);
       }
@@ -299,7 +371,6 @@ export function AdminDashboardPage() {
     quizFilter,
     classFilter,
     statusFilter,
-    gradeFilter,
     violationFilter,
     searchQuery,
     sortKey,
@@ -345,15 +416,44 @@ export function AdminDashboardPage() {
     return { total, gradedCount: graded.length, avg, activeOnline };
   }, [filteredSubmissions, liveSessions]);
 
-  const handleExportCSV = () => {
+  const handleExportCSV = async () => {
     if (filteredSubmissions.length === 0) {
       showToast('Tidak ada data submission untuk diekspor', 'error');
       return;
     }
 
-    // 1. Tentukan jumlah soal terbanyak dari submission yang ada
+    showToast('⏳ Mempersiapkan data ekspor & definisi soal...', 'info');
+
+    // 1. Ambil daftar teks pertanyaan untuk seluruh Quiz ID yang terlibat
+    const uniqueQuizIds = [
+      ...new Set(
+        filteredSubmissions
+          .map((s) => String(s.quiz_id || '').trim())
+          .filter(Boolean)
+      ),
+    ];
+    const quizQuestionMap = {};
+
+    await Promise.all(
+      uniqueQuizIds.map(async (qId) => {
+        try {
+          const res = await fetch(
+            `${API_BASE}/v1/quiz/questions/${encodeURIComponent(qId)}`
+          );
+          const d = await res.json();
+          if (res.ok && Array.isArray(d.data)) {
+            quizQuestionMap[qId] = d.data.map((q) => q.question_text || '');
+          }
+        } catch (_) {}
+      })
+    );
+
+    // 2. Tentukan jumlah soal terbanyak dari submission yang ada
     let maxQ = 0;
     filteredSubmissions.forEach((s) => {
+      const qList = quizQuestionMap[String(s.quiz_id || '').trim()] || [];
+      if (qList.length > maxQ) maxQ = qList.length;
+
       const ansObj = parseAnswersObject(s.answers);
       const keys = Object.keys(ansObj);
       keys.forEach((k) => {
@@ -364,26 +464,24 @@ export function AdminDashboardPage() {
     });
     if (maxQ === 0) maxQ = 3;
 
-    // 2. Susun Header Kolom Lengkap
+    // 3. Susun Header Kolom Lengkap & Padat
     const headers = [
       'No',
       'NIM',
       'Nama Mahasiswa',
       'Kelas',
-      'Attempt',
       'Quiz ID',
+      'Attempt',
       'Status Ujian',
       'Nilai (0-100)',
       'Catatan / Feedback Dosen',
-      'Waktu Submit',
       'Durasi Pengerjaan',
-      'Jumlah Pelanggaran',
-      'Batas Toleransi Pelanggaran',
-      'Rincian Pelanggaran',
+      'Pelanggaran',
     ];
 
     for (let q = 1; q <= maxQ; q++) {
-      headers.push(`Jawaban Soal ${q}`);
+      headers.push(`Soal ${q} (Pertanyaan)`);
+      headers.push(`Jawaban Mahasiswa ${q}`);
     }
 
     // Helper sanitasi teks untuk format CSV RFC 4180
@@ -393,9 +491,10 @@ export function AdminDashboardPage() {
       return `"${str}"`;
     };
 
-    // 3. Susun Baris Data Lengkap Mahasiswa & Jawaban
+    // 4. Susun Baris Data Mahasiswa, Soal, & Jawaban
     const rows = filteredSubmissions.map((s, idx) => {
       const ansObj = parseAnswersObject(s.answers);
+      const qList = quizQuestionMap[String(s.quiz_id || '').trim()] || [];
       const statusText =
         s.status === 'DISQUALIFIED'
           ? 'Diskualifikasi'
@@ -413,23 +512,17 @@ export function AdminDashboardPage() {
         escapeCsv(s.nim || ''),
         escapeCsv(s.nama || ''),
         escapeCsv(s.kelas || '-'),
-        s.attempt || 1,
         escapeCsv(s.quiz_id || ''),
+        s.attempt || 1,
         escapeCsv(statusText),
         s.grade !== null && s.grade !== undefined && s.grade !== '' ? s.grade : '',
         escapeCsv(s.feedback || ''),
-        escapeCsv(s.submitted_at ? new Date(s.submitted_at).toLocaleString('id-ID') : '-'),
         escapeCsv(durText),
-        s.violation_count || 0,
-        s.max_violations || 3,
-        escapeCsv(
-          s.violation_summary && s.violation_summary !== '-'
-            ? s.violation_summary
-            : 'Tidak ada pelanggaran'
-        ),
+        `${s.violation_count || 0}x`,
       ];
 
       for (let q = 1; q <= maxQ; q++) {
+        const questionText = qList[q - 1] || `Pertanyaan butir #${q}`;
         const ans =
           ansObj[`soal_${q}`] ||
           ansObj[String(q)] ||
@@ -437,14 +530,15 @@ export function AdminDashboardPage() {
           ansObj[`Soal ${q}`] ||
           ansObj[`soal${q}`] ||
           (ansObj[Object.keys(ansObj)[q - 1]]) ||
-          '';
+          '-';
+        row.push(escapeCsv(questionText));
         row.push(escapeCsv(ans));
       }
 
       return row.join(',');
     });
 
-    // 4. Tambahkan UTF-8 Byte Order Mark (\uFEFF) agar Microsoft Excel & Google Sheets
+    // 5. Tambahkan UTF-8 Byte Order Mark (\uFEFF) agar Microsoft Excel & Google Sheets
     // otomatis membuka karakter teks bahasa Indonesia, simbol, dan enter tanpa corrupt
     const csvContent = '\uFEFF' + [headers.join(','), ...rows].join('\r\n');
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
@@ -600,13 +694,15 @@ export function AdminDashboardPage() {
       {/* TAB 1 & 2 SHARED COMPACT FILTER BAR */}
       {(activeTab === 'SUBMISSIONS' || activeTab === 'LIVE') && (
         <div className="compact-filter-bar no-print">
-          <div className="filter-row">
+          {/* BARIS 1: SEMUA FILTER (SIMETRIS & RAPI) */}
+          <div className="filter-row" style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
             <input
               type="text"
               className="filter-input"
               placeholder="🔍 Cari nama mahasiswa atau NIM..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
+              style={{ minWidth: 220, flex: 1 }}
             />
 
             <select
@@ -627,7 +723,7 @@ export function AdminDashboardPage() {
               value={classFilter}
               onChange={(e) => setClassFilter(e.target.value)}
             >
-              <option value="ALL">🏫 Semua Kelas </option>
+              <option value="ALL">🏫 Semua Kelas</option>
               <option value="A">Kelas A (50 mhs)</option>
               <option value="B">Kelas B (49 mhs)</option>
               <option value="C">Kelas C (51 mhs)</option>
@@ -649,19 +745,6 @@ export function AdminDashboardPage() {
 
                 <select
                   className="filter-select"
-                  value={gradeFilter}
-                  onChange={(e) => setGradeFilter(e.target.value)}
-                >
-                  <option value="ALL">🎯 Semua Nilai</option>
-                  <option value="GRADED">📝 Sudah Dinilai</option>
-                  <option value="UNGRADED">⏳ Belum Dinilai</option>
-                  <option value="A">🌟 Nilai A (&ge; 80)</option>
-                  <option value="B">👍 Nilai B (60 - 79)</option>
-                  <option value="C">⚠️ Nilai C (&lt; 60)</option>
-                </select>
-
-                <select
-                  className="filter-select"
                   value={violationFilter}
                   onChange={(e) => setViolationFilter(e.target.value)}
                 >
@@ -677,7 +760,6 @@ export function AdminDashboardPage() {
               quizFilter !== 'ALL' ||
               classFilter !== 'ALL' ||
               statusFilter !== 'ALL' ||
-              gradeFilter !== 'ALL' ||
               violationFilter !== 'ALL' ||
               sortKey !== 'submitted_at-desc') && (
               <button
@@ -688,24 +770,69 @@ export function AdminDashboardPage() {
                   setQuizFilter('ALL');
                   setClassFilter('ALL');
                   setStatusFilter('ALL');
-                  setGradeFilter('ALL');
                   setViolationFilter('ALL');
                   setSortKey('submitted_at-desc');
                 }}
               >
-                ↺ Reset
+                ↺ Reset Filter
               </button>
             )}
+          </div>
 
-            <div
-              style={{
-                marginLeft: 'auto',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-              }}
-            >
+          {/* BARIS 2: INFORMASI DATA, SORTING & TOMBOL AKSI */}
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              paddingTop: 10,
+              borderTop: '1px solid #f1f5f9',
+              fontSize: '0.8rem',
+              color: '#64748b',
+              flexWrap: 'wrap',
+              gap: 10,
+            }}
+          >
+            {activeTab === 'SUBMISSIONS' ? (
+              <div>
+                Menampilkan <strong style={{ color: '#0f172a' }}>{filteredSubmissions.length}</strong>{' '}
+                dari total <strong style={{ color: '#0f172a' }}>{submissions.length}</strong> data jawaban mahasiswa.
+                <span style={{ marginLeft: 12, padding: '2px 8px', background: '#f1f5f9', borderRadius: 6, fontWeight: 700 }}>
+                  Rata-rata Nilai: <strong style={{ color: '#4f46e5' }}>{stats.avg}</strong>
+                </span>
+              </div>
+            ) : (
+              <div>
+                Memantau <strong style={{ color: '#0f172a' }}>{filteredLiveSessions.length}</strong> sesi live mahasiswa.
+              </div>
+            )}
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
               {activeTab === 'SUBMISSIONS' && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginRight: 4 }}>
+                  <span style={{ fontSize: '0.78rem', fontWeight: 600, color: '#475569' }}>
+                    Urutkan:
+                  </span>
+                  <select
+                    className="filter-select"
+                    style={{ padding: '5px 10px', fontSize: '0.8rem' }}
+                    value={sortKey}
+                    onChange={(e) => setSortKey(e.target.value)}
+                  >
+                    <option value="submitted_at-desc">Waktu Submit (Terbaru)</option>
+                    <option value="submitted_at-asc">Waktu Submit (Terlama)</option>
+                    <option value="grade-desc">Nilai (Tertinggi ➔ Terendah)</option>
+                    <option value="grade-asc">Nilai (Terendah ➔ Tertinggi)</option>
+                    <option value="nama-asc">Nama Mahasiswa (A - Z)</option>
+                    <option value="nama-desc">Nama Mahasiswa (Z - A)</option>
+                    <option value="nim-asc">NIM (Terkecil)</option>
+                    <option value="nim-desc">NIM (Terbesar)</option>
+                    <option value="violation_count-desc">Pelanggaran (Terbanyak)</option>
+                  </select>
+                </div>
+              )}
+
+              {activeTab === 'SUBMISSIONS' ? (
                 <>
                   <button
                     type="button"
@@ -714,6 +841,20 @@ export function AdminDashboardPage() {
                   >
                     🔄 Refresh
                   </button>
+
+                  {(role === 'SUPERADMIN' || role === 'DOSEN') && (
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-touchable"
+                      style={{ background: '#7c3aed', color: '#ffffff', fontWeight: 700 }}
+                      onClick={handleAutoGradeBatch}
+                      disabled={autoGradeLoading}
+                      title="Nilai otomatis seluruh jawaban yang belum dinilai menggunakan Gemini AI"
+                    >
+                      {autoGradeLoading ? '⏳ Menilai AI...' : '⚡ Auto-Grade AI'}
+                    </button>
+                  )}
+
                   <button
                     type="button"
                     className="btn btn-success btn-sm btn-touchable"
@@ -721,6 +862,7 @@ export function AdminDashboardPage() {
                   >
                     📥 Export CSV
                   </button>
+
                   {(role === 'SUPERADMIN' || role === 'DOSEN') && (
                     <button
                       type="button"
@@ -731,6 +873,7 @@ export function AdminDashboardPage() {
                       📤 Import Nilai
                     </button>
                   )}
+
                   <button
                     type="button"
                     className="btn btn-outline btn-sm btn-touchable"
@@ -739,8 +882,7 @@ export function AdminDashboardPage() {
                     🖨️ Cetak
                   </button>
                 </>
-              )}
-              {activeTab === 'LIVE' && (
+              ) : (
                 <button
                   type="button"
                   className="btn btn-outline btn-sm btn-touchable"
@@ -751,52 +893,6 @@ export function AdminDashboardPage() {
               )}
             </div>
           </div>
-
-          {/* BARIS SORTING & INFORMASI JUMLAH HASIL */}
-          {activeTab === 'SUBMISSIONS' && (
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                paddingTop: 8,
-                borderTop: '1px solid #f1f5f9',
-                fontSize: '0.78rem',
-                color: '#64748b',
-                flexWrap: 'wrap',
-                gap: 8,
-              }}
-            >
-              <div>
-                Menampilkan <strong style={{ color: '#0f172a' }}>{filteredSubmissions.length}</strong>{' '}
-                dari total <strong style={{ color: '#0f172a' }}>{submissions.length}</strong> data jawaban mahasiswa.
-                <span style={{ marginLeft: 14 }}>
-                  Rata-rata Nilai: <strong style={{ color: '#0f172a' }}>{stats.avg}</strong>
-                </span>
-              </div>
-
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ fontWeight: 600 }}>Urutkan Berdasarkan:</span>
-                <select
-                  className="filter-select"
-                  style={{ padding: '4px 8px', fontSize: '0.78rem' }}
-                  value={sortKey}
-                  onChange={(e) => setSortKey(e.target.value)}
-                >
-                  <option value="submitted_at-desc">Waktu Submit (Terbaru)</option>
-                  <option value="submitted_at-asc">Waktu Submit (Terlama)</option>
-                  <option value="nama-asc">Nama Mahasiswa (A - Z)</option>
-                  <option value="nama-desc">Nama Mahasiswa (Z - A)</option>
-                  <option value="nim-asc">NIM (Terkecil)</option>
-                  <option value="nim-desc">NIM (Terbesar)</option>
-                  <option value="grade-desc">Nilai (Tertinggi)</option>
-                  <option value="grade-asc">Nilai (Terendah)</option>
-                  <option value="violation_count-desc">Pelanggaran (Terbanyak)</option>
-                  <option value="violation_count-asc">Pelanggaran (Tersedikit)</option>
-                </select>
-              </div>
-            </div>
-          )}
         </div>
       )}
 
@@ -837,6 +933,7 @@ export function AdminDashboardPage() {
                       sub={sub}
                       role={role}
                       onSaveGrade={handleSaveGrade}
+                      onAutoGrade={role !== 'PROCTOR' ? handleAutoGradeSingle : undefined}
                       onOpenAnswerModal={(s, entries) =>
                         setAnswerModal({ sub: s, entries })
                       }

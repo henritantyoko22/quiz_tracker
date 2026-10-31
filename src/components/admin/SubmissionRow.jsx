@@ -6,6 +6,7 @@ export const SubmissionRow = memo(function SubmissionRow({
   sub,
   role,
   onSaveGrade,
+  onAutoGrade,
   onOpenAnswerModal,
   onOpenViolationModal,
   onOpenTimingModal,
@@ -15,6 +16,7 @@ export const SubmissionRow = memo(function SubmissionRow({
   );
   const [feedback, setFeedback] = useState(sub.feedback || '');
   const [saving, setSaving] = useState(false);
+  const [autoGrading, setAutoGrading] = useState(false);
 
   useEffect(() => {
     setGrade(sub.grade !== null && sub.grade !== undefined ? sub.grade : '');
@@ -30,6 +32,13 @@ export const SubmissionRow = memo(function SubmissionRow({
     setSaving(true);
     await onSaveGrade(sub.id, grade, feedback);
     setSaving(false);
+  };
+
+  const handleAutoGrade = async () => {
+    if (!onAutoGrade) return;
+    setAutoGrading(true);
+    await onAutoGrade(sub.id);
+    setAutoGrading(false);
   };
 
   return (
@@ -208,10 +217,22 @@ export const SubmissionRow = memo(function SubmissionRow({
               type="button"
               className="btn btn-success btn-xs"
               onClick={handleSave}
-              disabled={saving}
+              disabled={saving || autoGrading}
             >
               {saving ? '...' : '💾 Simpan'}
             </button>
+            {onAutoGrade && (
+              <button
+                type="button"
+                className="btn btn-xs"
+                style={{ background: '#7c3aed', color: '#ffffff' }}
+                onClick={handleAutoGrade}
+                disabled={saving || autoGrading}
+                title="Evaluasi otomatis jawaban ini menggunakan Gemini AI"
+              >
+                {autoGrading ? '⏳ AI...' : '⚡ AI'}
+              </button>
+            )}
           </div>
           <input
             type="text"

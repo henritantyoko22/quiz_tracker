@@ -249,6 +249,22 @@ async function initDbTables() {
         updated_at TIMESTAMPTZ DEFAULT NOW()
       );
     `);
+    await db.query(`
+      ALTER TABLE quiz_settings 
+      ADD COLUMN IF NOT EXISTS grading_rubric TEXT;
+    `);
+    await db.query(`
+      ALTER TABLE quiz_settings 
+      ADD COLUMN IF NOT EXISTS auto_grade BOOLEAN DEFAULT FALSE;
+    `);
+    await db.query(`
+      ALTER TABLE quiz_settings 
+      ADD COLUMN IF NOT EXISTS gemini_api_key TEXT;
+    `);
+    await db.query(`
+      ALTER TABLE quiz_settings 
+      ADD COLUMN IF NOT EXISTS gemini_model VARCHAR(50) DEFAULT 'gemini-1.5-flash';
+    `);
 
     // 3. Tambahkan kolom violation_count & max_violations di quiz_submissions
     await db.query(`
@@ -398,7 +414,8 @@ app.get('/v1/quiz/settings/:quizId', async (req, res) => {
 
     // 2. Kuis valid: Ambil pengaturan jadwal & durasi dari tabel quiz_settings
     const settingResult = await db.query(
-      `SELECT quiz_id, start_time, end_time, duration_minutes, max_violations, is_active 
+      `SELECT quiz_id, start_time, end_time, duration_minutes, max_violations, is_active,
+              grading_rubric, auto_grade, gemini_api_key, gemini_model
        FROM quiz_settings 
        WHERE quiz_id = $1`,
       [cleanQuizId]
@@ -409,6 +426,10 @@ app.get('/v1/quiz/settings/:quizId', async (req, res) => {
     let isActive = true;
     let startTime = null;
     let endTime = null;
+    let gradingRubric = '';
+    let autoGrade = false;
+    let geminiApiKey = '';
+    let geminiModel = 'gemini-1.5-flash';
 
     if (settingResult.rows.length > 0) {
       const row = settingResult.rows[0];
@@ -417,6 +438,10 @@ app.get('/v1/quiz/settings/:quizId', async (req, res) => {
       isActive = row.is_active !== false;
       startTime = row.start_time;
       endTime = row.end_time;
+      gradingRubric = row.grading_rubric || '';
+      autoGrade = Boolean(row.auto_grade);
+      geminiApiKey = row.gemini_api_key || '';
+      geminiModel = row.gemini_model || 'gemini-1.5-flash';
     }
 
     return res.json({
@@ -430,6 +455,10 @@ app.get('/v1/quiz/settings/:quizId', async (req, res) => {
         duration_minutes: durationMinutes,
         max_violations: maxViolations,
         is_active: isActive,
+        grading_rubric: gradingRubric,
+        auto_grade: autoGrade,
+        gemini_api_key: geminiApiKey,
+        gemini_model: geminiModel,
         total_questions: totalQuestions
       }
     });
@@ -441,7 +470,7 @@ app.get('/v1/quiz/settings/:quizId', async (req, res) => {
 
 // Menyimpan/memperbarui pengaturan jadwal & timer (Hanya SUPERADMIN & DOSEN)
 app.post('/v1/admin/quiz/settings', authenticate, requireRole('SUPERADMIN', 'DOSEN'), async (req, res) => {
-  const { quizId, startTime, endTime, durationMinutes, maxViolations, isActive } = req.body;
+  const { quizId, startTime, endTime, durationMinutes, maxViolations, isActive, gradingRubric, autoGrade, geminiApiKey, geminiModel } = req.body;
 
   if (!quizId) {
     return res.status(400).json({ status: 'error', message: 'quizId wajib diisi!' });
@@ -452,11 +481,15 @@ app.post('/v1/admin/quiz/settings', authenticate, requireRole('SUPERADMIN', 'DOS
   const active = isActive !== false;
   const start = startTime ? new Date(startTime).toISOString() : null;
   const end = endTime ? new Date(endTime).toISOString() : null;
+  const rubric = typeof gradingRubric === 'string' ? gradingRubric.trim() : '';
+  const isAuto = Boolean(autoGrade);
+  const key = typeof geminiApiKey === 'string' ? geminiApiKey.trim() : '';
+  const model = typeof geminiModel === 'string' && geminiModel.trim() ? geminiModel.trim() : 'gemini-1.5-flash';
 
   try {
     const result = await db.query(
-      `INSERT INTO quiz_settings (quiz_id, start_time, end_time, duration_minutes, max_violations, is_active, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, NOW())
+      `INSERT INTO quiz_settings (quiz_id, start_time, end_time, duration_minutes, max_violations, is_active, grading_rubric, auto_grade, gemini_api_key, gemini_model, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
        ON CONFLICT (quiz_id) 
        DO UPDATE SET 
          start_time = EXCLUDED.start_time,
@@ -464,9 +497,13 @@ app.post('/v1/admin/quiz/settings', authenticate, requireRole('SUPERADMIN', 'DOS
          duration_minutes = EXCLUDED.duration_minutes,
          max_violations = EXCLUDED.max_violations,
          is_active = EXCLUDED.is_active,
+         grading_rubric = EXCLUDED.grading_rubric,
+         auto_grade = EXCLUDED.auto_grade,
+         gemini_api_key = EXCLUDED.gemini_api_key,
+         gemini_model = EXCLUDED.gemini_model,
          updated_at = NOW()
        RETURNING *`,
-      [quizId.trim(), start, end, duration, maxV, active]
+      [quizId.trim(), start, end, duration, maxV, active, rubric, isAuto, key, model]
     );
     res.json({
       status: 'success',
@@ -689,7 +726,7 @@ app.post('/v1/quiz/submit', async (req, res) => {
     // 1. Validasi keabsahan mahasiswa & kuis dari database
     const [stuRes, setRes] = await Promise.all([
       db.query('SELECT nim, nama, kelas FROM quiz_students WHERE nim = $1', [cleanNim]),
-      db.query('SELECT quiz_id, max_violations, duration_minutes FROM quiz_settings WHERE quiz_id = $1', [cleanQuizId])
+      db.query('SELECT quiz_id, max_violations, duration_minutes, auto_grade FROM quiz_settings WHERE quiz_id = $1', [cleanQuizId])
     ]);
 
     if (stuRes.rows.length === 0) {
@@ -731,18 +768,30 @@ app.post('/v1/quiz/submit', async (req, res) => {
     const actLogJson = safeActLog ? JSON.stringify(safeActLog) : null;
     const attemptNum = parseInt(attempt) > 0 ? parseInt(attempt) : 1;
 
+    let insertedId = null;
     try {
-      await db.query(
+      const insRes = await db.query(
         `INSERT INTO quiz_submissions (user_id, nim, quiz_id, answers, status, violation_count, max_violations, question_timings, activity_log, duration_seconds, attempt, kelas, submitted_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())`,
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())
+         RETURNING id`,
         [userId, cleanNim, cleanQuizId, JSON.stringify(answers || {}), finalStatus, finalViolationCount, serverMaxViolations, qTimingsJson, actLogJson, durSec, attemptNum, studentKelas]
       );
+      insertedId = insRes.rows[0]?.id;
     } catch (insertColErr) {
-      await db.query(
+      const insRes = await db.query(
         `INSERT INTO quiz_submissions (user_id, nim, quiz_id, answers, status, violation_count, max_violations, submitted_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())`,
+         VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+         RETURNING id`,
         [userId, cleanNim, cleanQuizId, JSON.stringify(answers || {}), finalStatus, finalViolationCount, serverMaxViolations]
       );
+      insertedId = insRes.rows[0]?.id;
+    }
+
+    // Jika fitur auto-grade aktif untuk kuis ini, jalankan penilaian Gemini AI di background
+    if (insertedId && settingsRecord.auto_grade && finalStatus !== 'DISQUALIFIED') {
+      evaluateSubmissionWithGemini(insertedId).catch((aiErr) => {
+        console.warn('ℹ️ Background Auto-Grading Gemini AI:', aiErr.message);
+      });
     }
 
     // Update live session status
@@ -1751,6 +1800,199 @@ app.post('/v1/admin/submissions/import-grades', authenticate, requireRole('SUPER
     skippedCount,
     errors: errors.slice(0, 10),
   });
+});
+
+// Helper Evaluasi Jawaban Mahasiswa Menggunakan Google Gemini AI
+async function evaluateSubmissionWithGemini(submissionId, customApiKey, customModel, customRubric) {
+  const subRes = await db.query(
+    `SELECT s.id, s.user_id, s.nim, s.quiz_id, s.answers, s.status, s.grade,
+            set.grading_rubric, set.gemini_api_key, set.gemini_model, set.auto_grade
+     FROM quiz_submissions s
+     LEFT JOIN quiz_settings set ON set.quiz_id = s.quiz_id
+     WHERE s.id = $1`,
+    [submissionId]
+  );
+  if (subRes.rows.length === 0) throw new Error('Submission #' + submissionId + ' tidak ditemukan di database.');
+  const sub = subRes.rows[0];
+
+  const apiKey = (customApiKey || sub.gemini_api_key || process.env.GEMINI_API_KEY || '').trim();
+  if (!apiKey) {
+    throw new Error('Gemini API Key belum dikonfigurasi. Masukkan API Key pada menu Kelola Soal & Timer atau set env GEMINI_API_KEY.');
+  }
+
+  const model = customModel || sub.gemini_model || 'gemini-1.5-flash';
+  const rubric = (customRubric || sub.grading_rubric || '').trim() ||
+    'Nilai ketepatan, kejelasan logika, dan kelengkapan konsep pada setiap jawaban essay mahasiswa. Berikan total nilai dalam skala 0 - 100 dan feedback singkat yang edukatif.';
+
+  // Ambil butir pertanyaan kuis
+  const qRes = await db.query(
+    `SELECT id, question_text, question_type 
+     FROM quiz_questions 
+     WHERE quiz_id = $1 
+     ORDER BY id ASC`,
+    [sub.quiz_id]
+  );
+  const questions = qRes.rows || [];
+
+  let answersObj = {};
+  try {
+    answersObj = typeof sub.answers === 'string' ? JSON.parse(sub.answers) : (sub.answers || {});
+  } catch (_) {
+    answersObj = {};
+  }
+
+  let qaText = '';
+  questions.forEach((q, idx) => {
+    const qNum = idx + 1;
+    const ans =
+      answersObj[`soal_${qNum}`] ||
+      answersObj[String(qNum)] ||
+      answersObj[qNum] ||
+      answersObj[`Soal ${qNum}`] ||
+      answersObj[Object.keys(answersObj)[idx]] ||
+      '(Tidak dijawab)';
+    qaText += `\n--- SOAL #${qNum} ---\nPertanyaan: ${q.question_text}\nJawaban Mahasiswa: ${ans}\n`;
+  });
+
+  const promptText = `Anda adalah Dosen Penguji / Asisten Ahli Penilai Ujian Essay untuk mahasiswa Informatika.
+Tugas Anda adalah menilai jawaban mahasiswa secara objektif, adil, dan akurat berdasarkan pertanyaan dan panduan rubrik penilaian dosen berikut.
+
+PANDUAN / RUBRIK PENILAIAN DARI DOSEN:
+${rubric}
+
+BERKAS UJIAN MAHASISWA:
+Mahasiswa: ${sub.user_id} (${sub.nim})
+Quiz ID: #${sub.quiz_id}
+Daftar Pertanyaan dan Jawaban Mahasiswa:
+${qaText}
+
+PETUNJUK PENILAIAN:
+1. Evaluasi setiap jawaban mahasiswa terhadap pertanyaan dan rubrik yang telah ditetapkan oleh dosen.
+2. Hitung total nilai akhir dalam rentang angka bulat 0 sampai 100.
+3. Buat Catatan/Feedback Dosen yang edukatif, konstruktif, dan sopan dalam bahasa Indonesia. Sebutkan poin-poin yang sudah baik dan poin yang perlu diperbaiki bila ada.
+4. Jawab HANYA dalam format JSON valid persis seperti berikut tanpa teks pembuka/penutup tambahan di luar JSON:
+{
+  "grade": 85,
+  "feedback": "Jawaban nomor 1 sangat baik dan tepat. Pada nomor 2 konsep dasar sudah benar namun kurang menyertakan contoh implementasi.",
+  "breakdown": [
+    { "soal": 1, "skor": 45, "maks": 50, "catatan": "Konsep tepat." },
+    { "soal": 2, "skor": 40, "maks": 50, "catatan": "Kurang contoh." }
+  ]
+}`;
+
+  const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+
+  const response = await fetch(geminiUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: promptText }] }],
+      generationConfig: {
+        temperature: 0.2,
+        responseMimeType: 'application/json'
+      }
+    })
+  });
+
+  if (!response.ok) {
+    const errBody = await response.text();
+    let msg = `Google Gemini API Error (${response.status})`;
+    try {
+      const parsedErr = JSON.parse(errBody);
+      if (parsedErr?.error?.message) msg += `: ${parsedErr.error.message}`;
+    } catch (_) {
+      msg += `: ${errBody.slice(0, 150)}`;
+    }
+    throw new Error(msg);
+  }
+
+  const geminiData = await response.json();
+  const rawText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || '';
+  if (!rawText) throw new Error('Respon dari Google Gemini AI kosong.');
+
+  let parsedOutput;
+  try {
+    const cleanJson = rawText.replace(/```json/gi, '').replace(/```/g, '').trim();
+    parsedOutput = JSON.parse(cleanJson);
+  } catch (pe) {
+    throw new Error('Gagal memproses format JSON hasil penilaian Gemini: ' + pe.message);
+  }
+
+  let finalGrade = parseInt(parsedOutput.grade, 10);
+  if (isNaN(finalGrade)) finalGrade = 0;
+  finalGrade = Math.max(0, Math.min(100, finalGrade));
+
+  const finalFeedback = (parsedOutput.feedback || '').trim() || 'Telah dinilai secara otomatis oleh Gemini AI.';
+
+  await db.query(
+    `UPDATE quiz_submissions 
+     SET grade = $1, feedback = $2 
+     WHERE id = $3`,
+    [finalGrade, finalFeedback, submissionId]
+  );
+
+  return {
+    submissionId,
+    grade: finalGrade,
+    feedback: finalFeedback,
+    breakdown: parsedOutput.breakdown || []
+  };
+}
+
+// Endpoint Auto-Grading Gemini AI - Hanya SUPERADMIN & DOSEN
+app.post('/v1/admin/submissions/auto-grade', authenticate, requireRole('SUPERADMIN', 'DOSEN'), async (req, res) => {
+  const { submissionId, quizId, ungradeOnly, apiKey, model, rubric } = req.body;
+  try {
+    if (submissionId) {
+      const result = await evaluateSubmissionWithGemini(submissionId, apiKey, model, rubric);
+      return res.json({
+        status: 'success',
+        message: `Berhasil menilai jawaban dengan nilai ${result.grade}!`,
+        data: result
+      });
+    }
+
+    if (!quizId) {
+      return res.status(400).json({ status: 'error', message: 'submissionId atau quizId wajib diisi.' });
+    }
+
+    let query = `SELECT id FROM quiz_submissions WHERE quiz_id = $1`;
+    if (ungradeOnly !== false) {
+      query += ` AND (grade IS NULL OR grade = '')`;
+    }
+    query += ` ORDER BY id ASC LIMIT 50`;
+
+    const subList = await db.query(query, [String(quizId).trim()]);
+    if (subList.rows.length === 0) {
+      return res.json({
+        status: 'success',
+        message: 'Seluruh submission pada kuis #' + quizId + ' sudah memiliki nilai.',
+        gradedCount: 0
+      });
+    }
+
+    let gradedCount = 0;
+    const errors = [];
+    for (const r of subList.rows) {
+      try {
+        await evaluateSubmissionWithGemini(r.id, apiKey, model, rubric);
+        gradedCount++;
+        // Jeda 250ms untuk menghindari rate limit API
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      } catch (err) {
+        errors.push({ id: r.id, message: err.message });
+      }
+    }
+
+    res.json({
+      status: 'success',
+      message: `Selesai: ${gradedCount} jawaban berhasil dinilai otomatis oleh Gemini AI (${errors.length} gagal/dilewati).`,
+      gradedCount,
+      errors: errors.slice(0, 5)
+    });
+  } catch (err) {
+    sendServerError(res, err, 'Gagal menjalankan Auto-Grading Gemini AI: ' + err.message);
+  }
 });
 
 // Impor / Simpan Soal - Hanya SUPERADMIN & DOSEN

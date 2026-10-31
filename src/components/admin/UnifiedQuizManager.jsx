@@ -12,6 +12,13 @@ export function UnifiedQuizManager({ token, quizList, onRefreshQuizList, showToa
   const [startTime, setStartTime] = useState('');
   const [endTime, setEndTime] = useState('');
 
+  // Gemini AI Auto-Grading state
+  const [gradingRubric, setGradingRubric] = useState('');
+  const [autoGrade, setAutoGrade] = useState(false);
+  const [geminiApiKey, setGeminiApiKey] = useState('');
+  const [geminiModel, setGeminiModel] = useState('gemini-1.5-flash');
+  const [showApiKey, setShowApiKey] = useState(false);
+
   // Questions state
   const [questions, setQuestions] = useState([]);
   const [loadingQuiz, setLoadingQuiz] = useState(false);
@@ -49,12 +56,18 @@ export function UnifiedQuizManager({ token, quizList, onRefreshQuizList, showToa
           setIsActive(s.is_active !== false);
           setStartTime(toLocalISOString(s.start_time));
           setEndTime(toLocalISOString(s.end_time));
+          setGradingRubric(s.grading_rubric || '');
+          setAutoGrade(Boolean(s.auto_grade));
+          setGeminiApiKey(s.gemini_api_key || '');
+          setGeminiModel(s.gemini_model || 'gemini-1.5-flash');
         } else {
           setDurationMinutes(30);
           setMaxViolations(3);
           setIsActive(true);
           setStartTime('');
           setEndTime('');
+          setGradingRubric('');
+          setAutoGrade(false);
         }
 
         const rawQuestions = Array.isArray(qData.data) ? qData.data : [];
@@ -105,6 +118,8 @@ export function UnifiedQuizManager({ token, quizList, onRefreshQuizList, showToa
     setIsActive(true);
     setStartTime('');
     setEndTime('');
+    setGradingRubric('');
+    setAutoGrade(false);
     setQuestions([{ questionText: '', questionType: 'ESSAY' }]);
     setJsonText('[\n  {\n    "question_text": "Tuliskan pertanyaan soal 1..."\n  }\n]');
   };
@@ -182,6 +197,10 @@ export function UnifiedQuizManager({ token, quizList, onRefreshQuizList, showToa
           isActive: Boolean(isActive),
           startTime: startTime ? new Date(startTime).toISOString() : null,
           endTime: endTime ? new Date(endTime).toISOString() : null,
+          gradingRubric,
+          autoGrade: Boolean(autoGrade),
+          geminiApiKey,
+          geminiModel,
         }),
       });
       const settingsData = await settingsRes.json();
@@ -381,7 +400,85 @@ export function UnifiedQuizManager({ token, quizList, onRefreshQuizList, showToa
             </div>
           </div>
 
-          {/* SECTION 2: DAFTAR SOAL ESSAY */}
+          {/* SECTION 2: KONFIGURASI GEMINI AI AUTO-GRADING */}
+          <div className="form-section-card" style={{ background: '#f5f3ff', border: '1.5px solid #c4b5fd' }}>
+            <div className="form-section-title">
+              <span style={{ color: '#5b21b6', display: 'flex', alignItems: 'center', gap: 6, fontWeight: 800 }}>
+                <span>🤖</span> Auto-Grading AI (Google Gemini Pro / Flash)
+              </span>
+              <label
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  cursor: 'pointer',
+                  fontSize: '0.8rem',
+                  fontWeight: 700,
+                  color: '#6d28d9',
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={autoGrade}
+                  onChange={(e) => setAutoGrade(e.target.checked)}
+                />
+                ⚡ Aktifkan Penilaian Otomatis saat Mahasiswa Submit
+              </label>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 220px', gap: 12, marginBottom: 12 }}>
+              <div className="field-group">
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <label>Gemini API Key (Google AI Studio)</label>
+                  <button
+                    type="button"
+                    onClick={() => setShowApiKey(!showApiKey)}
+                    style={{ background: 'none', border: 'none', color: '#6366f1', cursor: 'pointer', fontSize: '0.72rem', fontWeight: 600 }}
+                  >
+                    {showApiKey ? '🙈 Sembunyikan' : '👁️ Tampilkan'}
+                  </button>
+                </div>
+                <input
+                  type={showApiKey ? 'text' : 'password'}
+                  placeholder="AIzaSy... (Opsional jika sudah diset di server GEMINI_API_KEY)"
+                  value={geminiApiKey}
+                  onChange={(e) => setGeminiApiKey(e.target.value)}
+                  style={{ background: '#ffffff' }}
+                />
+              </div>
+
+              <div className="field-group">
+                <label>Pilihan Model AI</label>
+                <select
+                  value={geminiModel}
+                  onChange={(e) => setGeminiModel(e.target.value)}
+                  style={{ background: '#ffffff' }}
+                >
+                  <option value="gemini-1.5-flash">Gemini 1.5 Flash (Cepat & Hemat)</option>
+                  <option value="gemini-1.5-pro">Gemini 1.5 Pro (Penalaran Mendalam)</option>
+                  <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="field-group">
+              <label>
+                📋 Panduan / Rubrik Penilaian & Kunci Jawaban Dosen
+              </label>
+              <textarea
+                rows={4}
+                placeholder="Definisikan rubrik penilaian, kunci jawaban, dan bobot nilai per butir soal...&#10;Contoh:&#10;- Soal 1 (Bobot 35): Mahasiswa harus menjelaskan konsep dasar X secara runtut dan memberikan contoh nyata.&#10;- Soal 2 (Bobot 35): Menyebutkan minimal 3 fungsi utama komponen Y.&#10;- Soal 3 (Bobot 30): Analisis studi kasus harus logis dan sesuai materi kuliah.&#10;Berikan nilai total (0-100) serta feedback edukatif yang konstruktif untuk mahasiswa."
+                value={gradingRubric}
+                onChange={(e) => setGradingRubric(e.target.value)}
+                style={{ fontSize: '0.84rem', lineHeight: 1.45, background: '#ffffff', minHeight: 90 }}
+              />
+              <div style={{ fontSize: '0.74rem', color: '#6d28d9', marginTop: 4 }}>
+                💡 <strong>Tips:</strong> AI akan membaca panduan rubrik ini bersama setiap butir soal kuis untuk mengevaluasi jawaban essay mahasiswa secara objektif dan memberikan catatan dosen langsung.
+              </div>
+            </div>
+          </div>
+
+          {/* SECTION 3: DAFTAR SOAL ESSAY */}
           <div className="form-section-card" style={{ background: '#ffffff' }}>
             <div className="form-section-title">
               <span>📝 Daftar Pertanyaan Soal ({questions.length} Soal)</span>
