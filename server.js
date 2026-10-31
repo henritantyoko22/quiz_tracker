@@ -53,12 +53,24 @@ let memoryUsers = [];
 const activeSessions = new Map();
 
 // Helper Token HMAC Kriptografis (Stateless agar kebal restart/serverless cold-start)
-// Menggunakan JWT_SECRET dari environment; jika belum diset di Vercel, turunkan kunci stabil berbasis DATABASE_URL
-// agar konsisten di seluruh instance lambda serverless (tidak berubah per request)
-const JWT_SECRET = process.env.JWT_SECRET || process.env.APP_SECRET || (() => {
-  const baseKey = process.env.DATABASE_URL || 'quiz-tracker-proctoring-salt-2026-secret-seed-jwt-token';
-  return crypto.createHmac('sha256', 'quiz-protect-v2-hmac-salt').update(baseKey).digest('hex');
-})();
+// Mendukung kunci utama dari JWT_SECRET/APP_SECRET serta kandidat turunan DATABASE_URL
+// agar tidak pernah drop session saat perpindahan atau cold-start instance serverless
+function getSecretCandidates() {
+  const candidates = new Set();
+  const envSecret = (process.env.JWT_SECRET || process.env.APP_SECRET || '').trim();
+  if (envSecret) candidates.add(envSecret);
+  const dbUrl = (process.env.DATABASE_URL || '').trim();
+  if (dbUrl) {
+    candidates.add(crypto.createHmac('sha256', 'quiz-protect-v2-hmac-salt').update(dbUrl).digest('hex'));
+  }
+  candidates.add(crypto.createHmac('sha256', 'quiz-protect-v2-hmac-salt').update('quiz-tracker-proctoring-salt-2026-secret-seed-jwt-token').digest('hex'));
+  candidates.add('quiz-tracker-proctoring-salt-2026-secret-seed-jwt-token');
+  return Array.from(candidates);
+}
+
+function getPrimarySecret() {
+  return getSecretCandidates()[0];
+}
 
 function generateAdminToken(payload) {
   const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
@@ -66,7 +78,7 @@ function generateAdminToken(payload) {
   const exp = Math.floor(Date.now() / 1000) + (7 * 24 * 60 * 60);
   const data = { ...payload, exp };
   const body = Buffer.from(JSON.stringify(data)).toString('base64url');
-  const signature = crypto.createHmac('sha256', JWT_SECRET).update(`${header}.${body}`).digest('base64url');
+  const signature = crypto.createHmac('sha256', getPrimarySecret()).update(`${header}.${body}`).digest('base64url');
   return `${header}.${body}.${signature}`;
 }
 
@@ -76,14 +88,18 @@ function verifyAdminToken(token) {
     const parts = token.split('.');
     if (parts.length !== 3) return null;
     const [header, body, signature] = parts;
-    const expectedSig = crypto.createHmac('sha256', JWT_SECRET).update(`${header}.${body}`).digest('base64url');
-
-    // Mitigasi Timing Attack: Gunakan crypto.timingSafeEqual
     const sigBuf = Buffer.from(signature, 'utf8');
-    const expectedBuf = Buffer.from(expectedSig, 'utf8');
-    if (sigBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(sigBuf, expectedBuf)) {
-      return null;
+
+    let isValid = false;
+    for (const secret of getSecretCandidates()) {
+      const expectedSig = crypto.createHmac('sha256', secret).update(`${header}.${body}`).digest('base64url');
+      const expectedBuf = Buffer.from(expectedSig, 'utf8');
+      if (sigBuf.length === expectedBuf.length && crypto.timingSafeEqual(sigBuf, expectedBuf)) {
+        isValid = true;
+        break;
+      }
     }
+    if (!isValid) return null;
 
     const payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
     if (payload.exp && Math.floor(Date.now() / 1000) > payload.exp) {
@@ -104,7 +120,7 @@ function generateExamToken(nim, quizId) {
   const exp = Math.floor(Date.now() / 1000) + (8 * 60 * 60); // 8 jam masa berlaku
   const payloadStr = `${cleanNim}:${cleanQuizId}:${exp}`;
   const b64 = Buffer.from(payloadStr).toString('base64url');
-  const sig = crypto.createHmac('sha256', JWT_SECRET).update(payloadStr).digest('base64url');
+  const sig = crypto.createHmac('sha256', getPrimarySecret()).update(payloadStr).digest('base64url');
   return `${b64}.${sig}`;
 }
 
@@ -115,13 +131,18 @@ function verifyExamToken(token, expectedNim, expectedQuizId) {
     if (parts.length !== 2) return false;
     const [b64, sig] = parts;
     const payloadStr = Buffer.from(b64, 'base64url').toString('utf8');
-    const expectedSig = crypto.createHmac('sha256', JWT_SECRET).update(payloadStr).digest('base64url');
-
     const sigBuf = Buffer.from(sig, 'utf8');
-    const expectedBuf = Buffer.from(expectedSig, 'utf8');
-    if (sigBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(sigBuf, expectedBuf)) {
-      return false;
+
+    let isValid = false;
+    for (const secret of getSecretCandidates()) {
+      const expectedSig = crypto.createHmac('sha256', secret).update(payloadStr).digest('base64url');
+      const expectedBuf = Buffer.from(expectedSig, 'utf8');
+      if (sigBuf.length === expectedBuf.length && crypto.timingSafeEqual(sigBuf, expectedBuf)) {
+        isValid = true;
+        break;
+      }
     }
+    if (!isValid) return false;
 
     const [tokenNim, tokenQuizId, expStr] = payloadStr.split(':');
     if (Math.floor(Date.now() / 1000) > parseInt(expStr)) return false;
