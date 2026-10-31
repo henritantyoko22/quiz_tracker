@@ -55,6 +55,7 @@ export function StudentQuizPage() {
   });
 
   // Mutable Refs for Memory-Efficient Timers & Heartbeat
+  const examTokenRef = useRef('');
   const sessionStartMsRef = useRef(0);
   const hardDeadlineMsRef = useRef(0);
   const questionTimingsRef = useRef([]);
@@ -308,11 +309,15 @@ export function StudentQuizPage() {
     try {
       await fetch(`${API_BASE}/v1/quiz/live/heartbeat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-exam-token': examTokenRef.current || '',
+        },
         body: JSON.stringify({
           userId: identityRef.current.name,
           nim: identityRef.current.nim,
           quizId: identityRef.current.quizId,
+          examToken: examTokenRef.current || '',
           status: statusOverride,
           currentQuestionIndex: qIdx,
           currentQuestionText: qTexts[qIdx] || `Soal ${qIdx + 1}`,
@@ -355,6 +360,7 @@ export function StudentQuizPage() {
         quizId: identityRef.current.quizId,
         kelas: identityRef.current.kelas || '-',
         attempt: identityRef.current.attempt || 1,
+        examToken: examTokenRef.current || '',
         answers: formattedAnswers,
         status: finalStatus,
         violationCount: countsRef.current.total,
@@ -388,7 +394,10 @@ export function StudentQuizPage() {
           const tId = setTimeout(() => controller.abort(), 8000);
           const res = await fetch(`${API_BASE}/v1/quiz/submit`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+              'Content-Type': 'application/json',
+              'x-exam-token': examTokenRef.current || '',
+            },
             body: JSON.stringify(payload),
             signal: controller.signal,
           });
@@ -442,13 +451,18 @@ export function StudentQuizPage() {
         'danger'
       );
 
-      // Log to /v1/violations in background
+      // Log to /v1/violations in background (dengan proteksi examToken & NIM riil)
       fetch(`${API_BASE}/v1/violations`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-exam-token': examTokenRef.current || '',
+        },
         body: JSON.stringify({
           userId: identityRef.current.name,
+          nim: identityRef.current.nim,
           quizId: identityRef.current.quizId,
+          examToken: examTokenRef.current || '',
           type,
           detail,
           url: window.location.href,
@@ -540,6 +554,9 @@ export function StudentQuizPage() {
       if (!liveRes.ok || liveData.status === 'error') {
         addToast(liveData.message || 'Gagal memulai sesi kuis.', 'danger');
         return;
+      }
+      if (liveData && liveData.token) {
+        examTokenRef.current = liveData.token;
       }
     } catch (err) {
       console.warn('Gagal koneksi live session, tetap melanjutkan:', err);

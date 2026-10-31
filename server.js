@@ -14,7 +14,18 @@ app.use(express.json());
 app.use('/src', express.static(path.join(__dirname, 'src')));
 
 // -------------------------------------------------------------
-// HELPER PASSWORD HASHING (PBKDF2 + SALT)
+// HELPER ERROR & KEAMANAN SISTEM
+// -------------------------------------------------------------
+function sendServerError(res, err, publicMessage = 'Terjadi kesalahan internal pada server.') {
+  console.error(`[SERVER_ERROR] ${publicMessage}:`, err && (err.stack || err.message || err));
+  return res.status(500).json({
+    status: 'error',
+    message: publicMessage
+  });
+}
+
+// -------------------------------------------------------------
+// HELPER PASSWORD HASHING (PBKDF2 + TIMING-SAFE EQUAL)
 // -------------------------------------------------------------
 function hashPassword(password, salt = crypto.randomBytes(16).toString('hex')) {
   const hash = crypto.pbkdf2Sync(password, salt, 10000, 64, 'sha512').toString('hex');
@@ -23,8 +34,15 @@ function hashPassword(password, salt = crypto.randomBytes(16).toString('hex')) {
 
 function verifyPassword(password, storedHash, salt) {
   if (!password || !storedHash || !salt) return false;
-  const hash = crypto.pbkdf2Sync(password, salt, 10000, 64, 'sha512').toString('hex');
-  return hash === storedHash;
+  try {
+    const hash = crypto.pbkdf2Sync(password, salt, 10000, 64, 'sha512').toString('hex');
+    const hashBuf = Buffer.from(hash, 'utf8');
+    const storedBuf = Buffer.from(storedHash, 'utf8');
+    if (hashBuf.length !== storedBuf.length) return false;
+    return crypto.timingSafeEqual(hashBuf, storedBuf);
+  } catch (_) {
+    return false;
+  }
 }
 
 // Fallback in-memory users (hanya digunakan jika DB benar-benar offline)
@@ -35,7 +53,12 @@ let memoryUsers = [];
 const activeSessions = new Map();
 
 // Helper Token HMAC Kriptografis (Stateless agar kebal restart/serverless cold-start)
-const JWT_SECRET = process.env.JWT_SECRET || process.env.APP_SECRET || 'quiz_tracker_secret_token_signature_key_2026_super_safe';
+// Jika JWT_SECRET tidak diset di environment, buat kunci acak ephemeral (mencegah forge token via default string)
+const JWT_SECRET = process.env.JWT_SECRET || process.env.APP_SECRET || (() => {
+  const ephemeral = crypto.randomBytes(64).toString('hex');
+  console.warn('⚠️ [SECURITY] Environment variable JWT_SECRET belum disetel! Menggunakan ephemeral secret acak.');
+  return ephemeral;
+})();
 
 function generateAdminToken(payload) {
   const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
@@ -54,7 +77,14 @@ function verifyAdminToken(token) {
     if (parts.length !== 3) return null;
     const [header, body, signature] = parts;
     const expectedSig = crypto.createHmac('sha256', JWT_SECRET).update(`${header}.${body}`).digest('base64url');
-    if (signature !== expectedSig) return null;
+
+    // Mitigasi Timing Attack: Gunakan crypto.timingSafeEqual
+    const sigBuf = Buffer.from(signature, 'utf8');
+    const expectedBuf = Buffer.from(expectedSig, 'utf8');
+    if (sigBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(sigBuf, expectedBuf)) {
+      return null;
+    }
+
     const payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
     if (payload.exp && Math.floor(Date.now() / 1000) > payload.exp) {
       return null; // Expired
@@ -66,24 +96,74 @@ function verifyAdminToken(token) {
 }
 
 // ---------------------------------------------------------------
-// LIVE STUDENT SESSIONS STORE (IN-MEMORY, AUTO-CLEANUP 24H)
+// EXAM SESSION TOKEN HELPER (Mencegah Pemalsuan & Fitnah Pelanggaran)
+// ---------------------------------------------------------------
+function generateExamToken(nim, quizId) {
+  const cleanNim = String(nim || '').trim();
+  const cleanQuizId = String(quizId || '').trim();
+  const exp = Math.floor(Date.now() / 1000) + (8 * 60 * 60); // 8 jam masa berlaku
+  const payloadStr = `${cleanNim}:${cleanQuizId}:${exp}`;
+  const b64 = Buffer.from(payloadStr).toString('base64url');
+  const sig = crypto.createHmac('sha256', JWT_SECRET).update(payloadStr).digest('base64url');
+  return `${b64}.${sig}`;
+}
+
+function verifyExamToken(token, expectedNim, expectedQuizId) {
+  try {
+    if (!token || typeof token !== 'string') return false;
+    const parts = token.split('.');
+    if (parts.length !== 2) return false;
+    const [b64, sig] = parts;
+    const payloadStr = Buffer.from(b64, 'base64url').toString('utf8');
+    const expectedSig = crypto.createHmac('sha256', JWT_SECRET).update(payloadStr).digest('base64url');
+
+    const sigBuf = Buffer.from(sig, 'utf8');
+    const expectedBuf = Buffer.from(expectedSig, 'utf8');
+    if (sigBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(sigBuf, expectedBuf)) {
+      return false;
+    }
+
+    const [tokenNim, tokenQuizId, expStr] = payloadStr.split(':');
+    if (Math.floor(Date.now() / 1000) > parseInt(expStr)) return false;
+    if (expectedNim && tokenNim !== String(expectedNim).trim()) return false;
+    if (expectedQuizId && tokenQuizId !== String(expectedQuizId).trim()) return false;
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------
+// LIVE STUDENT SESSIONS STORE (IN-MEMORY DENGAN BATAS KAPASITAS LRU)
 // ---------------------------------------------------------------
 // Key: `${nim}_${quizId}`, Value: liveData object
 const liveStudentSessions = new Map();
+const MAX_LIVE_SESSIONS = 1000;
 
 function getLiveSessionKey(nim, quizId) {
   return `${(nim || '').trim()}_${(quizId || '').trim()}`;
 }
 
-// Auto-cleanup sesi lama setiap jam (hapus yang > 24 jam tidak aktif)
+// Mitigasi DoS / OOM: Batasi kapasitas map in-memory
+function enforceLiveSessionsLimit() {
+  if (liveStudentSessions.size < MAX_LIVE_SESSIONS) return;
+  const entries = Array.from(liveStudentSessions.entries())
+    .sort((a, b) => (a[1].lastHeartbeat || 0) - (b[1].lastHeartbeat || 0));
+  const removeCount = Math.max(1, Math.ceil(MAX_LIVE_SESSIONS * 0.1));
+  for (let i = 0; i < removeCount && i < entries.length; i++) {
+    liveStudentSessions.delete(entries[i][0]);
+  }
+}
+
+// Auto-cleanup sesi lama setiap 30 menit (hapus yang > 6 jam tidak aktif)
 setInterval(() => {
-  const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+  const cutoff = Date.now() - 6 * 60 * 60 * 1000;
   for (const [key, session] of liveStudentSessions.entries()) {
-    if (session.lastHeartbeat < cutoff) {
+    if ((session.lastHeartbeat || 0) < cutoff) {
       liveStudentSessions.delete(key);
     }
   }
-}, 60 * 60 * 1000);
+}, 30 * 60 * 1000);
 
 // Middleware Autentikasi & Verifikasi Token
 function authenticate(req, res, next) {
@@ -92,17 +172,6 @@ function authenticate(req, res, next) {
 
   if (!token) {
     return res.status(401).json({ status: 'error', message: 'Akses ditolak: Token autentikasi tidak ditemukan.' });
-  }
-
-  // Khusus fallback token kompatibilitas lama jika dibutuhkan
-  if (token === 'secret-admin-token-2026') {
-    req.adminUser = {
-      userId: 1,
-      username: 'admin',
-      fullName: 'Super Administrator',
-      role: 'SUPERADMIN'
-    };
-    return next();
   }
 
   // 1. Cek dari memory cache
@@ -293,7 +362,7 @@ app.get('/v1/quiz/list', async (req, res) => {
       );
       res.json({ status: 'success', data: fallback.rows });
     } catch (fallbackErr) {
-      res.status(500).json({ status: 'error', message: err.message });
+      sendServerError(res, fallbackErr, 'Gagal memuat daftar kuis.');
     }
   }
 });
@@ -366,11 +435,7 @@ app.get('/v1/quiz/settings/:quizId', async (req, res) => {
     });
 
   } catch (err) {
-    return res.status(500).json({
-      status: 'error',
-      exists: false,
-      message: 'Gagal memeriksa kuis di database: ' + err.message
-    });
+    sendServerError(res, err, 'Gagal memeriksa kuis di database.');
   }
 });
 
@@ -409,7 +474,7 @@ app.post('/v1/admin/quiz/settings', authenticate, requireRole('SUPERADMIN', 'DOS
       data: result.rows[0]
     });
   } catch (err) {
-    res.status(500).json({ status: 'error', message: err.message });
+    sendServerError(res, err, 'Gagal menyimpan pengaturan kuis.');
   }
 });
 
@@ -438,7 +503,7 @@ app.get('/v1/quiz/questions/:quizId', async (req, res) => {
 
     res.json({ status: 'success', quizId: cleanQuizId, data: result.rows });
   } catch (err) {
-    res.status(500).json({ status: 'error', message: err.message });
+    sendServerError(res, err, 'Gagal mengambil daftar pertanyaan kuis.');
   }
 });
 
@@ -602,117 +667,150 @@ app.get('/v1/quiz/check-student', async (req, res) => {
       warningMessage
     });
   } catch (err) {
-    res.status(500).json({ status: 'error', message: err.message });
+    sendServerError(res, err, 'Gagal memverifikasi status mahasiswa.');
   }
 });
 
-// Menyimpan jawaban kuis peserta (disertai laporan jumlah pelanggaran & telemetry)
+// Menyimpan jawaban kuis peserta (disertai verifikasi integritas & server-enforced proctoring)
 app.post('/v1/quiz/submit', async (req, res) => {
-  const { userId, nim, quizId, answers, status, violationCount, maxViolations, questionTimings, activityLog, durationSeconds, attempt, kelas } = req.body;
+  const { userId, nim, quizId, answers, status, violationCount, questionTimings, activityLog, durationSeconds, attempt, kelas } = req.body;
 
-  if (!userId || !nim || userId.trim() === '' || nim.trim() === '' || userId === '-' || nim === '-') {
+  const cleanNim = String(nim || '').trim();
+  const cleanQuizId = String(quizId || '').trim();
+
+  if (!userId || !cleanNim || !cleanQuizId || userId === '-' || cleanNim === '-') {
     return res.status(400).json({
       status: 'error',
-      message: 'Submit ditolak: Nama Mahasiswa dan NIM wajib diisi!'
+      message: 'Submit ditolak: Nama Mahasiswa, NIM, dan ID Quiz wajib diisi!'
     });
   }
 
-  const vCount = parseInt(violationCount) >= 0 ? parseInt(violationCount) : 0;
-  const maxV = parseInt(maxViolations) > 0 ? parseInt(maxViolations) : 3;
-  const durSec = parseInt(durationSeconds) >= 0 ? parseInt(durationSeconds) : 0;
-  const qTimingsJson = questionTimings ? JSON.stringify(questionTimings) : null;
-  const actLogJson = activityLog ? JSON.stringify(activityLog) : null;
-  const attemptNum = parseInt(attempt) > 0 ? parseInt(attempt) : 1;
-
-  // Dapatkan kelas mahasiswa jika tidak dikirim dari client
-  let studentKelas = kelas;
-  if (!studentKelas) {
-    try {
-      const stu = await db.query('SELECT kelas FROM quiz_students WHERE nim = $1', [nim.trim()]);
-      if (stu.rows.length > 0) studentKelas = stu.rows[0].kelas;
-    } catch (_) {}
-  }
-
   try {
-    let result;
+    // 1. Validasi keabsahan mahasiswa & kuis dari database
+    const [stuRes, setRes] = await Promise.all([
+      db.query('SELECT nim, nama, kelas FROM quiz_students WHERE nim = $1', [cleanNim]),
+      db.query('SELECT quiz_id, max_violations, duration_minutes FROM quiz_settings WHERE quiz_id = $1', [cleanQuizId])
+    ]);
+
+    if (stuRes.rows.length === 0) {
+      return res.status(404).json({ status: 'error', message: 'Submit ditolak: Mahasiswa tidak terdaftar.' });
+    }
+    if (setRes.rows.length === 0) {
+      return res.status(404).json({ status: 'error', message: 'Submit ditolak: Kuis tidak ditemukan.' });
+    }
+
+    const studentRecord = stuRes.rows[0];
+    const settingsRecord = setRes.rows[0];
+    const studentKelas = kelas || studentRecord.kelas || '-';
+
+    // 2. Otoritatif: Ambil batas pelanggaran dari database, BUKAN dari req.body client
+    const serverMaxViolations = Number(settingsRecord.max_violations) || 3;
+
+    // 3. Otoritatif: Hitung pelanggaran riil yang tersimpan di database quiz_violations
+    const vDbRes = await db.query(
+      `SELECT COUNT(*)::int AS count FROM quiz_violations WHERE (user_id = $1 OR user_id = $2) AND quiz_id = $3`,
+      [cleanNim, studentRecord.nama, cleanQuizId]
+    );
+    const dbViolationCount = vDbRes.rows[0]?.count || 0;
+    const clientVCount = parseInt(violationCount) >= 0 ? parseInt(violationCount) : 0;
+    
+    // Server-enforced: Ambil nilai terbesar antara catatan database dan client
+    const finalViolationCount = Math.max(dbViolationCount, clientVCount);
+
+    // 4. Server-enforced: Cegah manipulasi status oleh mahasiswa!
+    // Jika pelanggaran >= batas toleransi server, paksa status DISQUALIFIED!
+    let finalStatus = status || 'COMPLETED';
+    if (finalViolationCount >= serverMaxViolations) {
+      finalStatus = 'DISQUALIFIED';
+    }
+
+    const durSec = parseInt(durationSeconds) >= 0 ? parseInt(durationSeconds) : 0;
+    const safeQTimings = Array.isArray(questionTimings) ? questionTimings.slice(0, 50) : null;
+    const safeActLog = Array.isArray(activityLog) ? activityLog.slice(-100) : null;
+    const qTimingsJson = safeQTimings ? JSON.stringify(safeQTimings) : null;
+    const actLogJson = safeActLog ? JSON.stringify(safeActLog) : null;
+    const attemptNum = parseInt(attempt) > 0 ? parseInt(attempt) : 1;
+
     try {
-      result = await db.query(
+      await db.query(
         `INSERT INTO quiz_submissions (user_id, nim, quiz_id, answers, status, violation_count, max_violations, question_timings, activity_log, duration_seconds, attempt, kelas, submitted_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())
-         RETURNING *`,
-        [userId, nim, quizId, JSON.stringify(answers), status || 'COMPLETED', vCount, maxV, qTimingsJson, actLogJson, durSec, attemptNum, studentKelas || '-']
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())`,
+        [userId, cleanNim, cleanQuizId, JSON.stringify(answers || {}), finalStatus, finalViolationCount, serverMaxViolations, qTimingsJson, actLogJson, durSec, attemptNum, studentKelas]
       );
     } catch (insertColErr) {
-      try {
-        result = await db.query(
-          `INSERT INTO quiz_submissions (user_id, nim, quiz_id, answers, status, violation_count, max_violations, question_timings, activity_log, duration_seconds, submitted_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
-           RETURNING *`,
-          [userId, nim, quizId, JSON.stringify(answers), status || 'COMPLETED', vCount, maxV, qTimingsJson, actLogJson, durSec]
-        );
-      } catch (insertOldErr) {
-        result = await db.query(
-          `INSERT INTO quiz_submissions (user_id, nim, quiz_id, answers, status, violation_count, max_violations, submitted_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
-           RETURNING *`,
-          [userId, nim, quizId, JSON.stringify(answers), status || 'COMPLETED', vCount, maxV]
-        );
-      }
+      await db.query(
+        `INSERT INTO quiz_submissions (user_id, nim, quiz_id, answers, status, violation_count, max_violations, submitted_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())`,
+        [userId, cleanNim, cleanQuizId, JSON.stringify(answers || {}), finalStatus, finalViolationCount, serverMaxViolations]
+      );
     }
 
-    // Update live session status ke SUBMITTED atau DISQUALIFIED
-    const liveKey = getLiveSessionKey(nim, quizId);
+    // Update live session status
+    const liveKey = getLiveSessionKey(cleanNim, cleanQuizId);
     let liveSession = liveStudentSessions.get(liveKey);
-    const finalLiveStatus = status === 'DISQUALIFIED' ? 'DISQUALIFIED' : (status === 'TIME_EXPIRED' ? 'TIME_EXPIRED' : 'SUBMITTED');
     const nowTs = Date.now();
-    if (!liveSession) {
-      liveSession = {
-        key: liveKey,
-        nama: userId || nim,
-        nim: nim.trim(),
-        quizId: quizId.trim(),
-        kelas: studentKelas || '-',
-        attempt: attemptNum,
-        startedAt: nowTs - (durSec ? durSec * 1000 : 60000),
-        startedAtISO: new Date(nowTs - (durSec ? durSec * 1000 : 60000)).toISOString(),
-        currentQuestionIndex: 0,
-        currentQuestionText: 'Selesai',
-        questionTimings: questionTimings || [],
-        activityLog: activityLog || [],
-        violationCount: vCount,
-        remainingSeconds: 0
-      };
-    } else {
-      if (questionTimings) liveSession.questionTimings = questionTimings;
-      if (activityLog) liveSession.activityLog = activityLog;
-      if (studentKelas) liveSession.kelas = studentKelas;
-      liveSession.attempt = attemptNum;
+    if (liveSession) {
+      liveSession.status = finalStatus;
+      liveSession.finishedAt = nowTs;
+      liveSession.finishedAtISO = new Date(nowTs).toISOString();
+      liveSession.lastHeartbeat = nowTs;
+      liveSession.remainingSeconds = 0;
+      liveSession.violationCount = finalViolationCount;
+      if (safeQTimings) liveSession.questionTimings = safeQTimings;
+      if (safeActLog) liveSession.activityLog = safeActLog;
     }
-    liveSession.status = finalLiveStatus;
-    liveSession.finishedAt = nowTs;
-    liveSession.finishedAtISO = new Date(nowTs).toISOString();
-    liveSession.lastHeartbeat = nowTs;
-    liveSession.remainingSeconds = 0;
-    liveStudentSessions.set(liveKey, liveSession);
 
     res.json({ status: 'success', message: 'Jawaban ujian berhasil disimpan.' });
   } catch (err) {
-    res.status(500).json({ status: 'error', message: 'Gagal menyimpan jawaban.' });
+    sendServerError(res, err, 'Gagal menyimpan jawaban ujian.');
   }
 });
 
-// Catat log pelanggaran proctoring
+// Catat log pelanggaran proctoring (dengan proteksi spoofing & validasi sesi)
 app.post('/v1/violations', async (req, res) => {
-  const { userId, quizId, type, detail, url } = req.body;
+  const { userId, nim, quizId, type, detail, url, examToken } = req.body;
+  const token = req.headers['x-exam-token'] || examToken;
+
+  const cleanNim = String(nim || userId || '').trim();
+  const cleanQuizId = String(quizId || '').trim();
+
+  if (!cleanNim || !cleanQuizId) {
+    return res.status(400).json({ status: 'error', message: 'NIM dan ID Quiz wajib diisi.' });
+  }
+
+  // Verifikasi examToken atau kecocokan sesi aktif untuk mencegah fitnah / spoofing antar peserta
+  const key = getLiveSessionKey(cleanNim, cleanQuizId);
+  const activeSession = liveStudentSessions.get(key);
+  const isTokenValid = token ? verifyExamToken(token, cleanNim, cleanQuizId) : false;
+
+  if (!isTokenValid && (!activeSession || activeSession.status !== 'ACTIVE')) {
+    return res.status(403).json({
+      status: 'error',
+      message: 'Akses ditolak: Hanya sesi ujian aktif yang berhak mengirim laporan pelanggaran.'
+    });
+  }
+
+  // Whitelist jenis pelanggaran
+  const allowedTypes = ['TAB_SWITCH', 'WINDOW_BLUR', 'COPY_PASTE', 'DEVTOOLS_OPEN', 'FULLSCREEN_EXIT', 'SUSPICIOUS_KEY'];
+  const safeType = allowedTypes.includes(type) ? type : 'VIOLATION';
+  const safeDetail = String(detail || 'Pelanggaran integritas proctoring').substring(0, 500);
+
   try {
     await db.query(
       `INSERT INTO quiz_violations (user_id, quiz_id, violation_type, detail, page_url, occurred_at)
        VALUES ($1, $2, $3, $4, $5, NOW())`,
-      [userId || 'ANONYMOUS', quizId || 'UNKNOWN', type, detail, url || '']
+      [cleanNim, cleanQuizId, safeType, safeDetail, String(url || '').substring(0, 255)]
     );
+
+    // Update counter di live session jika ada
+    if (activeSession) {
+      activeSession.violationCount = (activeSession.violationCount || 0) + 1;
+      activeSession.lastHeartbeat = Date.now();
+    }
+
     res.json({ status: 'success' });
   } catch (err) {
-    res.status(500).json({ status: 'error', message: err.message });
+    sendServerError(res, err, 'Gagal mencatat log pelanggaran proctoring.');
   }
 });
 
@@ -720,68 +818,84 @@ app.post('/v1/violations', async (req, res) => {
 // 1b. ENDPOINT LIVE MONITORING SESI PESERTA
 // -------------------------------------------------------------
 
-// Daftarkan sesi live peserta saat mulai mengerjakan (public, tidak perlu auth)
+// Daftarkan sesi live peserta saat mulai mengerjakan (dengan validasi DB & token sesi)
 app.post('/v1/quiz/live/session', async (req, res) => {
   const { userId, nim, quizId, totalQuestions, questionTexts, kelas, attempt, isRetake } = req.body;
   if (!nim || !quizId) {
     return res.status(400).json({ status: 'error', message: 'nim dan quizId wajib diisi.' });
   }
 
-  const cleanNim = nim.trim();
-  const cleanQuizId = quizId.trim();
-  const key = getLiveSessionKey(cleanNim, cleanQuizId);
-  const now = Date.now();
-  const existing = liveStudentSessions.get(key);
+  const cleanNim = String(nim).trim();
+  const cleanQuizId = String(quizId).trim();
 
-  // Cegah duplikat sesi aktif (jika sedang aktif dan heartbeat < 45 detik)
-  // Kecuali jika isRetake = true (mahasiswa baru saja diizinkan mulai sesi retake ke-2)
-  if (
-    !isRetake &&
-    existing &&
-    existing.status === 'ACTIVE' &&
-    now - (existing.lastHeartbeat || 0) < 45000
-  ) {
-    return res.status(409).json({
-      status: 'error',
-      message: 'Sesi kuis sedang berjalan aktif di perangkat/tab lain! Tidak diperbolehkan membuka sesi ganda secara bersamaan.'
+  try {
+    // Validasi bahwa mahasiswa dan kuis benar-benar ada di DB untuk mencegah pembanjiran data fiktif
+    const [stuRes, setRes] = await Promise.all([
+      db.query('SELECT nim, nama, kelas FROM quiz_students WHERE nim = $1', [cleanNim]),
+      db.query('SELECT quiz_id FROM quiz_settings WHERE quiz_id = $1', [cleanQuizId])
+    ]);
+
+    if (stuRes.rows.length === 0) {
+      return res.status(404).json({ status: 'error', message: 'NIM tidak terdaftar sebagai peserta mata kuliah.' });
+    }
+    if (setRes.rows.length === 0) {
+      return res.status(404).json({ status: 'error', message: 'ID Quiz tidak ditemukan.' });
+    }
+
+    const studentRecord = stuRes.rows[0];
+    const key = getLiveSessionKey(cleanNim, cleanQuizId);
+    const now = Date.now();
+    const existing = liveStudentSessions.get(key);
+
+    // Cegah duplikat sesi aktif (jika sedang aktif dan heartbeat < 45 detik)
+    if (
+      !isRetake &&
+      existing &&
+      existing.status === 'ACTIVE' &&
+      now - (existing.lastHeartbeat || 0) < 45000
+    ) {
+      return res.status(409).json({
+        status: 'error',
+        message: 'Sesi kuis sedang berjalan aktif di perangkat/tab lain! Tidak diperbolehkan membuka sesi ganda secara bersamaan.'
+      });
+    }
+
+    // Terapkan batas kapasitas map in-memory (mencegah DoS / OOM)
+    enforceLiveSessionsLimit();
+
+    const studentKelas = kelas || studentRecord.kelas || '-';
+    const safeQTexts = Array.isArray(questionTexts) ? questionTexts.slice(0, 50) : [];
+
+    liveStudentSessions.set(key, {
+      key,
+      nama: studentRecord.nama || userId || cleanNim,
+      nim: cleanNim,
+      quizId: cleanQuizId,
+      kelas: studentKelas,
+      attempt: Number(attempt) || 1,
+      totalQuestions: totalQuestions || safeQTexts.length || 0,
+      questionTexts: safeQTexts,
+      startedAt: now,
+      startedAtISO: new Date(now).toISOString(),
+      currentQuestionIndex: 0,
+      currentQuestionText: safeQTexts[0] || 'Soal 1',
+      questionTimings: [],
+      activityLog: [],
+      status: 'ACTIVE',
+      lastHeartbeat: now,
+      lastHeartbeatISO: new Date(now).toISOString(),
+      violationCount: 0,
+      remainingSeconds: null
     });
+
+    const token = generateExamToken(cleanNim, cleanQuizId);
+    res.json({ status: 'success', token });
+  } catch (err) {
+    sendServerError(res, err, 'Gagal mendaftarkan sesi kuis.');
   }
-
-  // Ambil kelas resmi mahasiswa
-  let studentKelas = kelas;
-  if (!studentKelas) {
-    try {
-      const stuRes = await db.query('SELECT kelas FROM quiz_students WHERE nim = $1', [cleanNim]);
-      if (stuRes.rows.length > 0) studentKelas = stuRes.rows[0].kelas;
-    } catch (_) {}
-  }
-
-  liveStudentSessions.set(key, {
-    key,
-    nama: userId || cleanNim,
-    nim: cleanNim,
-    quizId: cleanQuizId,
-    kelas: studentKelas || '-',
-    attempt: Number(attempt) || 1,
-    totalQuestions: totalQuestions || 0,
-    questionTexts: questionTexts || [],
-    startedAt: now,
-    startedAtISO: new Date(now).toISOString(),
-    currentQuestionIndex: 0,
-    currentQuestionText: (questionTexts && questionTexts[0]) || 'Soal 1',
-    questionTimings: [],       // [{ qNum, qText, totalSeconds, switchCount }]
-    activityLog: [],           // [{ type, questionNum, questionText, elapsedSeconds, timestamp, timestampISO }]
-    status: 'ACTIVE',
-    lastHeartbeat: now,
-    lastHeartbeatISO: new Date(now).toISOString(),
-    violationCount: 0,
-    remainingSeconds: null
-  });
-
-  res.json({ status: 'success' });
 });
 
-// Update heartbeat / data real-time dari peserta
+// Update heartbeat / data real-time dari peserta (dengan pembatasan ukuran payload)
 app.post('/v1/quiz/live/heartbeat', (req, res) => {
   const {
     nim, quizId,
@@ -789,30 +903,40 @@ app.post('/v1/quiz/live/heartbeat', (req, res) => {
     questionTimings, activityLog,
     remainingSeconds, violationCount,
     status,
-    userId, totalQuestions, questionTexts
+    userId, totalQuestions, questionTexts,
+    examToken
   } = req.body;
 
   if (!nim || !quizId) {
     return res.status(400).json({ status: 'error', message: 'nim dan quizId wajib diisi.' });
   }
 
-  const key = getLiveSessionKey(nim, quizId);
+  const cleanNim = String(nim).trim();
+  const cleanQuizId = String(quizId).trim();
+  const token = req.headers['x-exam-token'] || examToken;
+
+  if (token && !verifyExamToken(token, cleanNim, cleanQuizId)) {
+    return res.status(403).json({ status: 'error', message: 'Token sesi ujian tidak valid.' });
+  }
+
+  const key = getLiveSessionKey(cleanNim, cleanQuizId);
   const now = Date.now();
   let existing = liveStudentSessions.get(key);
 
-  // Jika sesi belum ada (server restart / cold start), buat otomatis (upsert)
   if (!existing) {
+    enforceLiveSessionsLimit();
+    const safeQTexts = Array.isArray(questionTexts) ? questionTexts.slice(0, 50) : [];
     existing = {
       key,
-      nama: userId || nim,
-      nim: nim.trim(),
-      quizId: quizId.trim(),
+      nama: userId || cleanNim,
+      nim: cleanNim,
+      quizId: cleanQuizId,
       totalQuestions: totalQuestions || 0,
-      questionTexts: questionTexts || [],
+      questionTexts: safeQTexts,
       startedAt: now,
       startedAtISO: new Date(now).toISOString(),
       currentQuestionIndex: 0,
-      currentQuestionText: (questionTexts && questionTexts[0]) || 'Soal 1',
+      currentQuestionText: safeQTexts[0] || 'Soal 1',
       questionTimings: [],
       activityLog: [],
       status: 'ACTIVE',
@@ -821,14 +945,13 @@ app.post('/v1/quiz/live/heartbeat', (req, res) => {
       violationCount: 0,
       remainingSeconds: null
     };
-    console.log(`🔄 Sesi live di-recover via heartbeat: ${nim} | Kuis: ${quizId}`);
   }
 
-  // Update data sesi dengan data terbaru dari client
+  // Update data dengan pembatasan array (mencegah memory explosion)
   existing.currentQuestionIndex = currentQuestionIndex !== undefined ? currentQuestionIndex : existing.currentQuestionIndex;
-  existing.currentQuestionText = currentQuestionText || existing.currentQuestionText;
-  existing.questionTimings = questionTimings || existing.questionTimings;
-  existing.activityLog = activityLog || existing.activityLog;
+  existing.currentQuestionText = currentQuestionText ? String(currentQuestionText).substring(0, 300) : existing.currentQuestionText;
+  existing.questionTimings = Array.isArray(questionTimings) ? questionTimings.slice(0, 50) : existing.questionTimings;
+  existing.activityLog = Array.isArray(activityLog) ? activityLog.slice(-100) : existing.activityLog;
   existing.remainingSeconds = remainingSeconds !== undefined ? remainingSeconds : existing.remainingSeconds;
   existing.violationCount = violationCount !== undefined ? violationCount : existing.violationCount;
   existing.lastHeartbeat = now;
@@ -840,7 +963,6 @@ app.post('/v1/quiz/live/heartbeat', (req, res) => {
     existing.finishedAt = now;
     existing.finishedAtISO = new Date(now).toISOString();
   } else {
-    // PENTING: Jika status existing sudah selesai, jangan izinkan heartbeat revert ke ACTIVE!
     const isAlreadyFinished = ['SUBMITTED', 'SUBMITTED_MANUALLY', 'DISQUALIFIED', 'TIME_EXPIRED'].includes(existing.status);
     if (!isAlreadyFinished) {
       existing.status = 'ACTIVE';
@@ -1329,7 +1451,7 @@ app.post('/v1/admin/login', async (req, res) => {
       }
     });
   } catch (err) {
-    res.status(500).json({ status: 'error', message: 'Terjadi kesalahan server: ' + err.message });
+    sendServerError(res, err, 'Gagal memproses autentikasi login.');
   }
 });
 
@@ -1391,7 +1513,7 @@ app.post('/v1/admin/users', authenticate, requireRole('SUPERADMIN'), async (req,
     if (err.code === '23505') {
       return res.status(400).json({ status: 'error', message: `Username "${username}" sudah digunakan!` });
     }
-    res.status(500).json({ status: 'error', message: err.message });
+    sendServerError(res, err, 'Gagal menambahkan akun pengguna.');
   }
 });
 
@@ -1407,7 +1529,7 @@ app.delete('/v1/admin/users/:id', authenticate, requireRole('SUPERADMIN'), async
     memoryUsers = memoryUsers.filter(u => u.id !== targetId);
     res.json({ status: 'success', message: 'Akun berhasil dihapus.' });
   } catch (err) {
-    res.status(500).json({ status: 'error', message: err.message });
+    sendServerError(res, err, 'Gagal menghapus akun pengguna.');
   }
 });
 
@@ -1489,7 +1611,7 @@ app.get('/v1/admin/submissions', authenticate, async (req, res) => {
         );
         res.json({ status: 'success', data: minimal.rows });
       } catch (minErr) {
-        res.status(500).json({ status: 'error', message: err.message });
+        sendServerError(res, minErr, 'Gagal memuat rekap jawaban ujian.');
       }
     }
   }
@@ -1508,7 +1630,7 @@ app.get('/v1/admin/violations/detail', authenticate, async (req, res) => {
     );
     res.json({ status: 'success', data: result.rows });
   } catch (err) {
-    res.status(500).json({ status: 'error', message: err.message });
+    sendServerError(res, err, 'Gagal memverifikasi status mahasiswa.');
   }
 });
 
@@ -1551,7 +1673,7 @@ app.post('/v1/admin/questions/import', authenticate, requireRole('SUPERADMIN', '
     }
     res.json({ status: 'success', message: `${questions.length} soal untuk Kuis #${cleanQuizId} berhasil disimpan!` });
   } catch (err) {
-    res.status(500).json({ status: 'error', message: err.message });
+    sendServerError(res, err, 'Gagal memverifikasi status mahasiswa.');
   }
 });
 
@@ -1565,11 +1687,14 @@ app.delete('/v1/admin/questions/:id', authenticate, requireRole('SUPERADMIN', 'D
     await db.query('DELETE FROM quiz_questions WHERE id = $1', [questionId]);
     res.json({ status: 'success', message: 'Butir soal berhasil dihapus.' });
   } catch (err) {
-    res.status(500).json({ status: 'error', message: err.message });
+    sendServerError(res, err, 'Gagal memverifikasi status mahasiswa.');
   }
 });
 
-// Dynamic React Modular Bundle (menggunakan literal path.join agar @vercel/nft otomatis mem-bundle seluruh file src/)
+// Dynamic React Modular Bundle dengan In-Memory Caching (Mencegah Event Loop Blocking)
+let cachedBundleCode = null;
+let cachedHtml = null;
+
 function loadReactModulesRaw() {
   return [
     { name: 'src/services/api.js', code: fs.readFileSync(path.join(__dirname, 'src/services/api.js'), 'utf8') },
@@ -1588,6 +1713,7 @@ function loadReactModulesRaw() {
 }
 
 function buildReactBundleCode() {
+  if (cachedBundleCode) return cachedBundleCode;
   const chunks = [
     'const { useState, useEffect, useMemo, useCallback, useRef, memo } = React;'
   ];
@@ -1598,24 +1724,15 @@ function buildReactBundleCode() {
       .replace(/^\s*export\s+(const|function|let|var|class)\s+/gm, '$1 ');
     chunks.push(`\n// --- MODULE: ${mod.name} ---\n${transformed}`);
   }
-  return chunks.join('\n');
+  cachedBundleCode = chunks.join('\n');
+  return cachedBundleCode;
 }
 
-app.get('/bundle.jsx', (req, res) => {
-  try {
-    res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
-    res.send(buildReactBundleCode());
-  } catch (err) {
-    res.status(500).send(`console.error("Failed to build React bundle:", ${JSON.stringify(err.message)});`);
-  }
-});
-
-// Routing Halaman SPA React.js (inlined CSS & JSX dari src/ agar 100% langsung tampil di Vercel tanpa kendala path static)
-const sendReactApp = (req, res) => {
-  try {
-    const cssContent = fs.readFileSync(path.join(__dirname, 'src/styles/app.css'), 'utf8');
-    const jsxBundle = buildReactBundleCode();
-    const html = `<!DOCTYPE html>
+function getCachedHtml() {
+  if (cachedHtml) return cachedHtml;
+  const cssContent = fs.readFileSync(path.join(__dirname, 'src/styles/app.css'), 'utf8');
+  const jsxBundle = buildReactBundleCode();
+  cachedHtml = `<!DOCTYPE html>
 <html lang="id">
 <head>
   <meta charset="UTF-8" />
@@ -1641,10 +1758,26 @@ ${jsxBundle}
   </script>
 </body>
 </html>`;
-    res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.status(200).send(html);
+  return cachedHtml;
+}
+
+app.get('/bundle.jsx', (req, res) => {
+  try {
+    res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.send(buildReactBundleCode());
   } catch (err) {
-    res.status(500).send(`<pre>Gagal memuat aplikasi React: ${err.message}</pre>`);
+    sendServerError(res, err, 'Gagal membangun bundle aplikasi.');
+  }
+});
+
+// Routing Halaman SPA React.js (inlined CSS & JSX dari cache memory, sub-millisecond tanpa blocking)
+const sendReactApp = (req, res) => {
+  try {
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.status(200).send(getCachedHtml());
+  } catch (err) {
+    sendServerError(res, err, 'Gagal memuat aplikasi kuis.');
   }
 };
 
