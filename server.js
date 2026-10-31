@@ -1823,8 +1823,9 @@ function buildReactBundleCode() {
   for (const mod of loadReactModulesRaw()) {
     const transformed = mod.code
       .replace(/^\s*import\s+[\s\S]*?from\s+['"][^'"]+['"];?\s*$/gm, '')
+      .replace(/^\s*export\s*\{[\s\S]*?\}(?:\s*from\s+['"][^'"]+['"])?;?\s*$/gm, '')
       .replace(/^\s*export\s+default\s+/gm, '')
-      .replace(/^\s*export\s+(const|function|let|var|class)\s+/gm, '$1 ');
+      .replace(/^\s*export\s+(const|function|let|var|class|async\s+function)\s+/gm, '$1 ');
     chunks.push(`\n// --- MODULE: ${mod.name} ---\n${transformed}`);
   }
   cachedBundleCode = chunks.join('\n');
