@@ -18,6 +18,47 @@ export function UnifiedQuizManager({ token, quizList, onRefreshQuizList, showToa
   const [geminiApiKey, setGeminiApiKey] = useState('');
   const [geminiModel, setGeminiModel] = useState('gemini-1.5-flash');
   const [showApiKey, setShowApiKey] = useState(false);
+  const [testingKey, setTestingKey] = useState(false);
+  const [availableModelList, setAvailableModelList] = useState([]);
+  const [keyTestStatus, setKeyTestStatus] = useState(null);
+
+  const handleTestApiKey = async () => {
+    const key = (geminiApiKey || '').trim();
+    if (!key) {
+      showToast('Masukkan Gemini API Key terlebih dahulu untuk ditest.', 'error');
+      return;
+    }
+    setTestingKey(true);
+    setKeyTestStatus(null);
+    try {
+      const res = await fetch(`${API_BASE}/v1/admin/gemini/test`, {
+        method: 'POST',
+        headers: getAuthHeaders(token),
+        body: JSON.stringify({ apiKey: key }),
+      });
+      const data = await res.json();
+      if (res.ok && data.status === 'success') {
+        showToast(data.message, 'success');
+        setKeyTestStatus({ ok: true, msg: data.message });
+        if (Array.isArray(data.models) && data.models.length > 0) {
+          setAvailableModelList(data.models);
+          // Jika model yang sekarang tidak ada di daftar model aktif akun, otomatis pilih yang pertama
+          if (!data.models.some((m) => m.id === geminiModel)) {
+            setGeminiModel(data.models[0].id);
+          }
+        }
+      } else {
+        const errMsg = data.message || 'Gagal memverifikasi API Key.';
+        showToast(errMsg, 'error');
+        setKeyTestStatus({ ok: false, msg: errMsg, hint: data.hint });
+      }
+    } catch (err) {
+      showToast('Koneksi gagal: ' + err.message, 'error');
+      setKeyTestStatus({ ok: false, msg: err.message });
+    } finally {
+      setTestingKey(false);
+    }
+  };
 
   // Questions state
   const [questions, setQuestions] = useState([]);
@@ -426,25 +467,60 @@ export function UnifiedQuizManager({ token, quizList, onRefreshQuizList, showToa
               </label>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 220px', gap: 12, marginBottom: 12 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 240px', gap: 12, marginBottom: 12 }}>
               <div className="field-group">
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <label>Gemini API Key (Google AI Studio)</label>
-                  <button
-                    type="button"
-                    onClick={() => setShowApiKey(!showApiKey)}
-                    style={{ background: 'none', border: 'none', color: '#6366f1', cursor: 'pointer', fontSize: '0.72rem', fontWeight: 600 }}
-                  >
-                    {showApiKey ? '🙈 Sembunyikan' : '👁️ Tampilkan'}
-                  </button>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <button
+                      type="button"
+                      onClick={() => setShowApiKey(!showApiKey)}
+                      style={{ background: 'none', border: 'none', color: '#6366f1', cursor: 'pointer', fontSize: '0.72rem', fontWeight: 600 }}
+                    >
+                      {showApiKey ? '🙈 Sembunyikan' : '👁️ Tampilkan'}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-outline btn-xs"
+                      disabled={testingKey || !geminiApiKey.trim()}
+                      onClick={handleTestApiKey}
+                      title="Tes keabsahan API Key dan ambil daftar model yang aktif"
+                    >
+                      {testingKey ? '⏳ Menguji...' : '🔍 Tes API Key'}
+                    </button>
+                  </div>
                 </div>
                 <input
                   type={showApiKey ? 'text' : 'password'}
-                  placeholder="AIzaSy... (Opsional jika sudah diset di server GEMINI_API_KEY)"
+                  placeholder="AIzaSy... (Ambil dari https://aistudio.google.com/app/apikey)"
                   value={geminiApiKey}
-                  onChange={(e) => setGeminiApiKey(e.target.value)}
+                  onChange={(e) => {
+                    setGeminiApiKey(e.target.value);
+                    setKeyTestStatus(null);
+                  }}
                   style={{ background: '#ffffff' }}
                 />
+                {keyTestStatus && (
+                  <div
+                    style={{
+                      fontSize: '0.76rem',
+                      marginTop: 4,
+                      padding: '6px 10px',
+                      borderRadius: 6,
+                      background: keyTestStatus.ok ? '#dcfce7' : '#fee2e2',
+                      color: keyTestStatus.ok ? '#166534' : '#991b1b',
+                      lineHeight: 1.4,
+                    }}
+                  >
+                    <strong>{keyTestStatus.ok ? '✅ ' : '⛔ '}</strong>
+                    {keyTestStatus.msg}
+                    {keyTestStatus.hint && (
+                      <div style={{ marginTop: 2, fontSize: '0.72rem', opacity: 0.9 }}>
+                        💡 {keyTestStatus.hint}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
               <div className="field-group">
@@ -454,11 +530,21 @@ export function UnifiedQuizManager({ token, quizList, onRefreshQuizList, showToa
                   onChange={(e) => setGeminiModel(e.target.value)}
                   style={{ background: '#ffffff' }}
                 >
-                  <option value="gemini-2.5-flash">Gemini 2.5 Flash (Rekomendasi - Cepat & Cerdas)</option>
-                  <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
-                  <option value="gemini-1.5-flash-latest">Gemini 1.5 Flash Latest</option>
-                  <option value="gemini-1.5-pro">Gemini 1.5 Pro (Penalaran Mendalam)</option>
-                  <option value="gemini-1.5-flash">Gemini 1.5 Flash (Legacy)</option>
+                  {availableModelList.length > 0 ? (
+                    availableModelList.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.name || m.id} ({m.id})
+                      </option>
+                    ))
+                  ) : (
+                    <>
+                      <option value="gemini-2.5-flash">Gemini 2.5 Flash (Rekomendasi - Cepat & Cerdas)</option>
+                      <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
+                      <option value="gemini-1.5-flash-latest">Gemini 1.5 Flash Latest</option>
+                      <option value="gemini-1.5-pro">Gemini 1.5 Pro (Penalaran Mendalam)</option>
+                      <option value="gemini-1.5-flash">Gemini 1.5 Flash (Legacy)</option>
+                    </>
+                  )}
                 </select>
               </div>
             </div>

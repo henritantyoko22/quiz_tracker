@@ -2059,6 +2059,58 @@ PETUNJUK PENILAIAN:
   };
 }
 
+// Endpoint Pengetesan Gemini API Key & Pengambilan Model Aktif - Hanya SUPERADMIN & DOSEN
+app.post('/v1/admin/gemini/test', authenticate, requireRole('SUPERADMIN', 'DOSEN'), async (req, res) => {
+  const { apiKey } = req.body;
+  const cleanKey = String(apiKey || process.env.GEMINI_API_KEY || '').replace(/^['"]+|['"]+$/g, '').trim();
+  if (!cleanKey) {
+    return res.status(400).json({ status: 'error', message: 'API Key wajib diisi untuk melakukan pengetesan.' });
+  }
+
+  try {
+    const listRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(cleanKey)}`);
+    const listBody = await listRes.text();
+    let listData;
+    try {
+      listData = JSON.parse(listBody);
+    } catch (_) {
+      return res.status(502).json({ status: 'error', message: `Respon Google API invalid: ${listBody.slice(0, 150)}` });
+    }
+
+    if (!listRes.ok) {
+      return res.status(listRes.status).json({
+        status: 'error',
+        message: `Google API Error (${listRes.status}): ${listData?.error?.message || listBody.slice(0, 150)}`,
+        hint: 'Pastikan API Key dibuat dari Google AI Studio (https://aistudio.google.com/app/apikey) dan layanan Generative Language API aktif tanpa restriksi IP/Referrer.'
+      });
+    }
+
+    const availableModels = (listData.models || [])
+      .filter(m => Array.isArray(m.supportedGenerationMethods) && m.supportedGenerationMethods.includes('generateContent'))
+      .map(m => ({
+        id: m.name.replace(/^models\//, ''),
+        name: m.displayName || m.name.replace(/^models\//, ''),
+        description: m.description || ''
+      }));
+
+    if (availableModels.length === 0) {
+      return res.json({
+        status: 'warn',
+        message: 'API Key valid, namun tidak ditemukan model yang mendukung generateContent.',
+        models: []
+      });
+    }
+
+    return res.json({
+      status: 'success',
+      message: `API Key valid! Ditemukan ${availableModels.length} model aktif dari akun Google Anda.`,
+      models: availableModels
+    });
+  } catch (err) {
+    return res.status(500).json({ status: 'error', message: `Gagal menghubungi Google API: ${err.message}` });
+  }
+});
+
 // Endpoint Auto-Grading Gemini AI - Hanya SUPERADMIN & DOSEN
 app.post('/v1/admin/submissions/auto-grade', authenticate, requireRole('SUPERADMIN', 'DOSEN'), async (req, res) => {
   const { submissionId, quizId, ungradeOnly, apiKey, model, rubric } = req.body;
