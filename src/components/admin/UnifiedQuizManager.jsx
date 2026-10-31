@@ -454,9 +454,11 @@ export function UnifiedQuizManager({ token, quizList, onRefreshQuizList, showToa
                   onChange={(e) => setGeminiModel(e.target.value)}
                   style={{ background: '#ffffff' }}
                 >
-                  <option value="gemini-1.5-flash">Gemini 1.5 Flash (Cepat & Hemat)</option>
-                  <option value="gemini-1.5-pro">Gemini 1.5 Pro (Penalaran Mendalam)</option>
+                  <option value="gemini-2.5-flash">Gemini 2.5 Flash (Rekomendasi - Cepat & Cerdas)</option>
                   <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
+                  <option value="gemini-1.5-flash-latest">Gemini 1.5 Flash Latest</option>
+                  <option value="gemini-1.5-pro">Gemini 1.5 Pro (Penalaran Mendalam)</option>
+                  <option value="gemini-1.5-flash">Gemini 1.5 Flash (Legacy)</option>
                 </select>
               </div>
             </div>
