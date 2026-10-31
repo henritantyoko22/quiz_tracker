@@ -614,3 +614,6 @@ export function LiveDetailModal({ targetSession, token, onClose }) {
     </div>
   );
 }
+
+export { ImportGradesModal } from './ImportGradesModal.jsx';
+

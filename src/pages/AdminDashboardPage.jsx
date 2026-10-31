@@ -8,6 +8,7 @@ import {
   AnswerReaderModal,
   ViolationLogModal,
   LiveDetailModal,
+  ImportGradesModal,
 } from '../components/admin/AdminModals.jsx';
 
 export function AdminDashboardPage() {
@@ -47,6 +48,7 @@ export function AdminDashboardPage() {
   const [answerModal, setAnswerModal] = useState(null);
   const [violationModal, setViolationModal] = useState(null);
   const [liveDetailModal, setLiveDetailModal] = useState(null);
+  const [importModalOpen, setImportModalOpen] = useState(false);
   const [toasts, setToasts] = useState([]);
 
   const showToast = useCallback((msg, type = 'info') => {
@@ -154,15 +156,17 @@ export function AdminDashboardPage() {
     if (!token) return;
     fetchQuizList();
     fetchSubmissions();
-    fetchLiveSessions();
-  }, [token, fetchQuizList, fetchSubmissions, fetchLiveSessions]);
+    if (role === 'SUPERADMIN' || role === 'PROCTOR') {
+      fetchLiveSessions();
+    }
+  }, [token, role, fetchQuizList, fetchSubmissions, fetchLiveSessions]);
 
-  // Memory-efficient polling for Live Sessions
+  // Sinkronisasi data live hanya saat berpindah ke tab LIVE (tanpa polling otomatis berulang di background)
   useEffect(() => {
     if (!token || (role !== 'SUPERADMIN' && role !== 'PROCTOR')) return;
-    const intervalMs = activeTab === 'LIVE' ? 3000 : 10000;
-    const timer = setInterval(fetchLiveSessions, intervalMs);
-    return () => clearInterval(timer);
+    if (activeTab === 'LIVE') {
+      fetchLiveSessions();
+    }
   }, [token, role, activeTab, fetchLiveSessions]);
 
   const handleSaveGrade = useCallback(
@@ -343,45 +347,117 @@ export function AdminDashboardPage() {
 
   const handleExportCSV = () => {
     if (filteredSubmissions.length === 0) {
-      showToast('Tidak ada data untuk diekspor', 'error');
+      showToast('Tidak ada data submission untuk diekspor', 'error');
       return;
     }
+
+    // 1. Tentukan jumlah soal terbanyak dari submission yang ada
+    let maxQ = 0;
+    filteredSubmissions.forEach((s) => {
+      const ansObj = parseAnswersObject(s.answers);
+      const keys = Object.keys(ansObj);
+      keys.forEach((k) => {
+        const num = parseInt(k.replace(/\D/g, ''));
+        if (!isNaN(num) && num > maxQ) maxQ = num;
+      });
+      if (keys.length > maxQ) maxQ = keys.length;
+    });
+    if (maxQ === 0) maxQ = 3;
+
+    // 2. Susun Header Kolom Lengkap
     const headers = [
-      'No.',
+      'No',
       'NIM',
       'Nama Mahasiswa',
-      'Kelas PPK',
+      'Kelas',
       'Attempt',
       'Quiz ID',
-      'Pelanggaran',
-      'Status',
-      'Nilai',
-      'Catatan Dosen',
+      'Status Ujian',
+      'Nilai (0-100)',
+      'Catatan / Feedback Dosen',
       'Waktu Submit',
+      'Durasi Pengerjaan',
+      'Jumlah Pelanggaran',
+      'Batas Toleransi Pelanggaran',
+      'Rincian Pelanggaran',
     ];
-    const rows = filteredSubmissions.map((s, idx) => [
-      idx + 1,
-      `"${s.nim || ''}"`,
-      `"${(s.nama || '').replace(/"/g, '""')}"`,
-      `"${s.kelas || '-'}"`,
-      s.attempt || 1,
-      `"${s.quiz_id || ''}"`,
-      s.violation_count || 0,
-      `"${s.status || 'COMPLETED'}"`,
-      s.grade ?? '',
-      `"${(s.feedback || '').replace(/"/g, '""')}"`,
-      `"${s.submitted_at ? new Date(s.submitted_at).toLocaleString('id-ID') : ''}"`,
-    ]);
-    const csvContent = [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
+
+    for (let q = 1; q <= maxQ; q++) {
+      headers.push(`Jawaban Soal ${q}`);
+    }
+
+    // Helper sanitasi teks untuk format CSV RFC 4180
+    const escapeCsv = (val) => {
+      if (val === null || val === undefined) return '""';
+      const str = String(val).replace(/"/g, '""');
+      return `"${str}"`;
+    };
+
+    // 3. Susun Baris Data Lengkap Mahasiswa & Jawaban
+    const rows = filteredSubmissions.map((s, idx) => {
+      const ansObj = parseAnswersObject(s.answers);
+      const statusText =
+        s.status === 'DISQUALIFIED'
+          ? 'Diskualifikasi'
+          : s.status === 'TIME_EXPIRED'
+          ? 'Waktu Habis'
+          : 'Selesai Mandiri';
+
+      const durText =
+        Number(s.duration_seconds) > 0
+          ? formatDuration(Number(s.duration_seconds))
+          : '-';
+
+      const row = [
+        idx + 1,
+        escapeCsv(s.nim || ''),
+        escapeCsv(s.nama || ''),
+        escapeCsv(s.kelas || '-'),
+        s.attempt || 1,
+        escapeCsv(s.quiz_id || ''),
+        escapeCsv(statusText),
+        s.grade !== null && s.grade !== undefined && s.grade !== '' ? s.grade : '',
+        escapeCsv(s.feedback || ''),
+        escapeCsv(s.submitted_at ? new Date(s.submitted_at).toLocaleString('id-ID') : '-'),
+        escapeCsv(durText),
+        s.violation_count || 0,
+        s.max_violations || 3,
+        escapeCsv(
+          s.violation_summary && s.violation_summary !== '-'
+            ? s.violation_summary
+            : 'Tidak ada pelanggaran'
+        ),
+      ];
+
+      for (let q = 1; q <= maxQ; q++) {
+        const ans =
+          ansObj[`soal_${q}`] ||
+          ansObj[String(q)] ||
+          ansObj[q] ||
+          ansObj[`Soal ${q}`] ||
+          ansObj[`soal${q}`] ||
+          (ansObj[Object.keys(ansObj)[q - 1]]) ||
+          '';
+        row.push(escapeCsv(ans));
+      }
+
+      return row.join(',');
+    });
+
+    // 4. Tambahkan UTF-8 Byte Order Mark (\uFEFF) agar Microsoft Excel & Google Sheets
+    // otomatis membuka karakter teks bahasa Indonesia, simbol, dan enter tanpa corrupt
+    const csvContent = '\uFEFF' + [headers.join(','), ...rows].join('\r\n');
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `Rekap_Nilai_Quiz_${quizFilter}_${new Date()
-      .toISOString()
-      .slice(0, 10)}.csv`;
+    const dateStr = new Date().toISOString().slice(0, 10);
+    const quizName = quizFilter !== 'ALL' ? `Quiz_${quizFilter}` : 'Semua_Quiz';
+    const classStr = classFilter !== 'ALL' ? `_Kelas_${classFilter}` : '';
+    a.download = `Rekap_Lengkap_Jawaban_${quizName}${classStr}_${dateStr}.csv`;
     a.click();
     URL.revokeObjectURL(url);
+    showToast(`Berhasil mengekspor ${filteredSubmissions.length} jawaban mahasiswa!`, 'success');
   };
 
   if (!token) {
@@ -456,7 +532,7 @@ export function AdminDashboardPage() {
         <div className="brand-group">
           <div className="brand-icon">🎓</div>
           <div className="brand-title">
-            <h1>QuizGuard React Admin</h1>
+            <h1>QuizProtect Admin</h1>
             <p>
               Login sebagai <strong>{username}</strong> ({role})
             </p>
@@ -645,6 +721,16 @@ export function AdminDashboardPage() {
                   >
                     📥 Export CSV
                   </button>
+                  {(role === 'SUPERADMIN' || role === 'DOSEN') && (
+                    <button
+                      type="button"
+                      className="btn btn-warning btn-sm btn-touchable"
+                      onClick={() => setImportModalOpen(true)}
+                      title="Impor nilai & feedback AI dari file CSV"
+                    >
+                      📤 Import Nilai
+                    </button>
+                  )}
                   <button
                     type="button"
                     className="btn btn-outline btn-sm btn-touchable"
@@ -858,6 +944,13 @@ export function AdminDashboardPage() {
         targetSession={liveDetailModal}
         token={token}
         onClose={() => setLiveDetailModal(null)}
+      />
+      <ImportGradesModal
+        isOpen={importModalOpen}
+        onClose={() => setImportModalOpen(false)}
+        token={token}
+        onSuccess={fetchSubmissions}
+        showToast={showToast}
       />
 
       {/* TOAST STACK */}

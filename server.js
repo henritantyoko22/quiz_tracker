@@ -1647,8 +1647,110 @@ app.post('/v1/admin/submissions/grade', authenticate, requireRole('SUPERADMIN', 
     );
     res.json({ status: 'success', message: 'Jawaban ujian berhasil disimpan.' });
   } catch (err) {
-    res.status(500).json({ status: 'error', message: 'Gagal menyimpan jawaban.' });
+    sendServerError(res, err, 'Gagal menyimpan penilaian.');
   }
+});
+
+// Batch Impor Nilai (Grading Import AI / CSV) - Hanya SUPERADMIN & DOSEN
+app.post('/v1/admin/submissions/import-grades', authenticate, requireRole('SUPERADMIN', 'DOSEN'), async (req, res) => {
+  const { grades } = req.body;
+  if (!Array.isArray(grades) || grades.length === 0) {
+    return res.status(400).json({ status: 'error', message: 'Daftar nilai (grades) tidak boleh kosong.' });
+  }
+
+  let updatedCount = 0;
+  let skippedCount = 0;
+  const errors = [];
+
+  for (const item of grades) {
+    const rawNim = item.nim ? String(item.nim).trim() : '';
+    const rawQuizId = item.quizId || item.quiz_id ? String(item.quizId || item.quiz_id).trim() : '';
+    const submissionId = item.submissionId || item.submission_id || item.id;
+    const rawGrade = item.grade ?? item.nilai;
+    const feedback = item.feedback !== undefined && item.feedback !== null ? String(item.feedback) : (item.catatan || item.catatan_dosen || '');
+
+    if (rawGrade === undefined || rawGrade === null || rawGrade === '') {
+      skippedCount++;
+      continue;
+    }
+
+    const gradeNum = parseInt(rawGrade, 10);
+    if (isNaN(gradeNum) || gradeNum < 0 || gradeNum > 100) {
+      errors.push({ nim: rawNim, quizId: rawQuizId, message: `Nilai '${rawGrade}' tidak valid (harus 0-100)` });
+      skippedCount++;
+      continue;
+    }
+
+    try {
+      let result;
+      if (submissionId) {
+        result = await db.query(
+          `UPDATE quiz_submissions 
+           SET grade = $1, feedback = $2 
+           WHERE id = $3 
+           RETURNING id`,
+          [gradeNum, feedback, submissionId]
+        );
+      } else if (rawNim && rawQuizId) {
+        if (item.attempt) {
+          result = await db.query(
+            `UPDATE quiz_submissions 
+             SET grade = $1, feedback = $2 
+             WHERE (LOWER(TRIM(nim)) = LOWER($3) OR LOWER(TRIM(user_id)) = LOWER($3)) 
+               AND quiz_id = $4 
+               AND attempt = $5
+             RETURNING id`,
+            [gradeNum, feedback, rawNim, rawQuizId, parseInt(item.attempt, 10) || 1]
+          );
+        } else {
+          result = await db.query(
+            `UPDATE quiz_submissions 
+             SET grade = $1, feedback = $2 
+             WHERE id = (
+               SELECT id FROM quiz_submissions 
+               WHERE (LOWER(TRIM(nim)) = LOWER($3) OR LOWER(TRIM(user_id)) = LOWER($3)) 
+                 AND quiz_id = $4 
+               ORDER BY attempt DESC, submitted_at DESC 
+               LIMIT 1
+             )
+             RETURNING id`,
+            [gradeNum, feedback, rawNim, rawQuizId]
+          );
+        }
+      } else if (rawNim) {
+        result = await db.query(
+          `UPDATE quiz_submissions 
+           SET grade = $1, feedback = $2 
+           WHERE id = (
+             SELECT id FROM quiz_submissions 
+             WHERE LOWER(TRIM(nim)) = LOWER($3) OR LOWER(TRIM(user_id)) = LOWER($3)
+             ORDER BY submitted_at DESC 
+             LIMIT 1
+           )
+           RETURNING id`,
+          [gradeNum, feedback, rawNim]
+        );
+      }
+
+      if (result && result.rowCount > 0) {
+        updatedCount += result.rowCount;
+      } else {
+        skippedCount++;
+        errors.push({ nim: rawNim, quizId: rawQuizId, message: 'Data submission tidak ditemukan di database' });
+      }
+    } catch (dbErr) {
+      skippedCount++;
+      errors.push({ nim: rawNim, quizId: rawQuizId, message: 'Kesalahan saat menyimpan nilai' });
+    }
+  }
+
+  res.json({
+    status: 'success',
+    message: `Berhasil mengimpor ${updatedCount} nilai mahasiswa (${skippedCount} dilewati).`,
+    updatedCount,
+    skippedCount,
+    errors: errors.slice(0, 10),
+  });
 });
 
 // Impor / Simpan Soal - Hanya SUPERADMIN & DOSEN
@@ -1698,6 +1800,7 @@ let cachedHtml = null;
 function loadReactModulesRaw() {
   return [
     { name: 'src/services/api.js', code: fs.readFileSync(path.join(__dirname, 'src/services/api.js'), 'utf8') },
+    { name: 'src/components/admin/ImportGradesModal.jsx', code: fs.readFileSync(path.join(__dirname, 'src/components/admin/ImportGradesModal.jsx'), 'utf8') },
     { name: 'src/components/admin/SubmissionRow.jsx', code: fs.readFileSync(path.join(__dirname, 'src/components/admin/SubmissionRow.jsx'), 'utf8') },
     { name: 'src/components/admin/LiveSessionRow.jsx', code: fs.readFileSync(path.join(__dirname, 'src/components/admin/LiveSessionRow.jsx'), 'utf8') },
     { name: 'src/components/admin/AdminModals.jsx', code: fs.readFileSync(path.join(__dirname, 'src/components/admin/AdminModals.jsx'), 'utf8') },
