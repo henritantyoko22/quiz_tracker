@@ -459,7 +459,7 @@ app.get('/v1/quiz/settings/:quizId', async (req, res) => {
     let gradingRubric = '';
     let autoGrade = false;
     let geminiApiKey = '';
-    let geminiModel = 'gemini-2.5-flash';
+    let geminiModel = 'gemini-3.8-flash';
 
     if (settingResult.rows.length > 0) {
       const row = settingResult.rows[0];
@@ -471,7 +471,10 @@ app.get('/v1/quiz/settings/:quizId', async (req, res) => {
       gradingRubric = row.grading_rubric || '';
       autoGrade = Boolean(row.auto_grade);
       geminiApiKey = row.gemini_api_key || '';
-      geminiModel = row.gemini_model && row.gemini_model !== 'gemini-1.5-flash' ? row.gemini_model : 'gemini-2.5-flash';
+      // geminiModel = row.gemini_model && row.gemini_model !== 'gemini-1.5-flash' ? row.gemini_model : 'gemini-2.5-flash';
+      // Ganti fallback default jika ada:
+      geminiModel = row.gemini_model || 'gemini-3.8-flash';
+
     }
 
     return res.json({
