@@ -459,7 +459,7 @@ app.get('/v1/quiz/settings/:quizId', async (req, res) => {
     let gradingRubric = '';
     let autoGrade = false;
     let geminiApiKey = '';
-    let geminiModel = 'gemini-1.5-flash';
+    let geminiModel = 'gemini-2.5-flash';
 
     if (settingResult.rows.length > 0) {
       const row = settingResult.rows[0];
@@ -471,7 +471,7 @@ app.get('/v1/quiz/settings/:quizId', async (req, res) => {
       gradingRubric = row.grading_rubric || '';
       autoGrade = Boolean(row.auto_grade);
       geminiApiKey = row.gemini_api_key || '';
-      geminiModel = row.gemini_model || 'gemini-1.5-flash';
+      geminiModel = row.gemini_model && row.gemini_model !== 'gemini-1.5-flash' ? row.gemini_model : 'gemini-2.5-flash';
     }
 
     return res.json({
@@ -514,7 +514,9 @@ app.post('/v1/admin/quiz/settings', authenticate, requireRole('SUPERADMIN', 'DOS
   const rubric = typeof gradingRubric === 'string' ? gradingRubric.trim() : '';
   const isAuto = Boolean(autoGrade);
   const key = typeof geminiApiKey === 'string' ? geminiApiKey.trim() : '';
-  const model = typeof geminiModel === 'string' && geminiModel.trim() ? geminiModel.trim() : 'gemini-1.5-flash';
+  const model = typeof geminiModel === 'string' && geminiModel.trim() && geminiModel.trim() !== 'gemini-1.5-flash'
+    ? geminiModel.trim()
+    : 'gemini-2.5-flash';
 
   try {
     const result = await db.query(
@@ -1853,7 +1855,8 @@ async function callGeminiWithFallback(rawApiKey, requestedModel, promptText) {
     throw new Error('Gemini API Key kosong atau belum dikonfigurasi.');
   }
 
-  const cleanReq = String(requestedModel || '').replace(/^models\//, '').trim() || 'gemini-1.5-flash';
+  let cleanReq = String(requestedModel || '').replace(/^models\//, '').trim() || 'gemini-2.5-flash';
+  if (cleanReq === 'gemini-1.5-flash') cleanReq = 'gemini-2.5-flash';
 
   // 1. Coba panggil model yang diminta dosen (pada v1beta dan v1)
   let requestedModelError = null;
@@ -1968,7 +1971,8 @@ async function evaluateSubmissionWithGemini(submissionId, customApiKey, customMo
     throw new Error('Gemini API Key belum dikonfigurasi. Masukkan API Key pada menu Kelola Soal & Timer atau set env GEMINI_API_KEY.');
   }
 
-  const model = customModel || sub.gemini_model || 'gemini-1.5-flash';
+  let model = customModel || sub.gemini_model || 'gemini-2.5-flash';
+  if (model === 'gemini-1.5-flash') model = 'gemini-2.5-flash';
   const rubric = (customRubric || sub.grading_rubric || '').trim() ||
     'Nilai ketepatan, kejelasan logika, dan kelengkapan konsep pada setiap jawaban essay mahasiswa. Berikan total nilai dalam skala 0 - 100 dan feedback singkat yang edukatif.';
 

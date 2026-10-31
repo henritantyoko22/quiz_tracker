@@ -16,7 +16,7 @@ export function UnifiedQuizManager({ token, quizList, onRefreshQuizList, showToa
   const [gradingRubric, setGradingRubric] = useState('');
   const [autoGrade, setAutoGrade] = useState(false);
   const [geminiApiKey, setGeminiApiKey] = useState('');
-  const [geminiModel, setGeminiModel] = useState('gemini-1.5-flash');
+  const [geminiModel, setGeminiModel] = useState('gemini-2.5-flash');
   const [showApiKey, setShowApiKey] = useState(false);
   const [testingKey, setTestingKey] = useState(false);
   const [availableModelList, setAvailableModelList] = useState([]);
@@ -100,7 +100,11 @@ export function UnifiedQuizManager({ token, quizList, onRefreshQuizList, showToa
           setGradingRubric(s.grading_rubric || '');
           setAutoGrade(Boolean(s.auto_grade));
           setGeminiApiKey(s.gemini_api_key || '');
-          setGeminiModel(s.gemini_model || 'gemini-1.5-flash');
+          setGeminiModel(
+            s.gemini_model && s.gemini_model !== 'gemini-1.5-flash'
+              ? s.gemini_model
+              : 'gemini-2.5-flash'
+          );
         } else {
           setDurationMinutes(30);
           setMaxViolations(3);
