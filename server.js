@@ -340,12 +340,20 @@ async function initDbTables() {
       );
     `);
 
-    // 5. Auto-sync 197 data mahasiswa PPK jika tabel belum terisi lengkap
+    // 5. Auto-sync data mahasiswa (PPK & Algoritma Evolusioner)
     try {
-      const studentsPpk = require('./src/data/students_ppk.json');
-      const countRes = await db.query('SELECT COUNT(*) AS count FROM quiz_students');
-      if (parseInt(countRes.rows[0].count) < studentsPpk.length) {
-        for (const s of studentsPpk) {
+      const allStudentLists = [];
+      try {
+        const studentsPpk = require('./src/data/students_ppk.json');
+        if (Array.isArray(studentsPpk)) allStudentLists.push(...studentsPpk);
+      } catch (_) {}
+      try {
+        const studentsAlgo = require('./src/data/students_algo_evolusioner.json');
+        if (Array.isArray(studentsAlgo)) allStudentLists.push(...studentsAlgo);
+      } catch (_) {}
+
+      if (allStudentLists.length > 0) {
+        for (const s of allStudentLists) {
           await db.query(
             `INSERT INTO quiz_students (nim, nama, kelas, prodi, status, semester)
              VALUES ($1, $2, $3, $4, $5, $6)
@@ -359,7 +367,7 @@ async function initDbTables() {
             [s.nim, s.nama, s.kelas, s.prodi, s.status, s.semester]
           );
         }
-        console.log(`✅ Berhasil menyelaraskan ${studentsPpk.length} data peserta PPK ke database.`);
+        console.log(`✅ Berhasil menyelaraskan ${allStudentLists.length} data peserta kuliah ke database.`);
       }
     } catch (seedErr) {
       console.warn('ℹ️ Seed mahasiswa DB:', seedErr.message);
@@ -638,6 +646,12 @@ app.get('/v1/quiz/check-student', async (req, res) => {
         const studentsPpk = require('./src/data/students_ppk.json');
         student = studentsPpk.find(s => s.nim === cleanNim);
       } catch (_) {}
+      if (!student) {
+        try {
+          const studentsAlgo = require('./src/data/students_algo_evolusioner.json');
+          student = studentsAlgo.find(s => s.nim === cleanNim);
+        } catch (_) {}
+      }
     }
 
     if (!student) {
