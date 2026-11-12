@@ -35,6 +35,90 @@ export function AnswerReaderModal({ modalData, onClose }) {
           className="modal-body"
           style={{ display: 'flex', flexDirection: 'column', gap: 12 }}
         >
+          {/* LOKASI PRESENSI MAHASISWA & ANTI-FAKE GPS */}
+          {(sub.location_status || sub.client_ip) && (
+            <div
+              style={{
+                background:
+                  sub.location_status === 'VALID_CAMPUS'
+                    ? '#f0fdf4'
+                    : sub.location_status === 'FAKE_GPS_SPOOF' || sub.location_status === 'FAKE_GPS_DETECTED'
+                    ? '#fef2f2'
+                    : '#fff1f2',
+                border: `1.5px solid ${
+                  sub.location_status === 'VALID_CAMPUS'
+                    ? '#86efac'
+                    : sub.location_status === 'FAKE_GPS_SPOOF' || sub.location_status === 'FAKE_GPS_DETECTED'
+                    ? '#ef4444'
+                    : '#fca5a5'
+                }`,
+                borderRadius: 10,
+                padding: '10px 14px',
+                fontSize: '0.82rem',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                flexWrap: 'wrap',
+                gap: 8,
+              }}
+            >
+              <div>
+                <div style={{ fontWeight: 800, color: '#0f172a', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span>📍</span>
+                  Presensi Lokasi Fisik:
+                  <span
+                    className={`badge ${
+                      sub.location_status === 'VALID_CAMPUS'
+                        ? 'badge-success'
+                        : 'badge-danger'
+                    }`}
+                    style={{
+                      fontSize: '0.72rem',
+                      fontWeight: 800,
+                      background:
+                        sub.location_status === 'FAKE_GPS_SPOOF' || sub.location_status === 'FAKE_GPS_DETECTED'
+                          ? '#dc2626'
+                          : undefined,
+                      color:
+                        sub.location_status === 'FAKE_GPS_SPOOF' || sub.location_status === 'FAKE_GPS_DETECTED'
+                          ? '#ffffff'
+                          : undefined,
+                    }}
+                  >
+                    {sub.location_status === 'VALID_CAMPUS'
+                      ? '✅ DI LINGKUNGAN FSM UNDIP'
+                      : sub.location_status === 'FAKE_GPS_SPOOF' || sub.location_status === 'FAKE_GPS_DETECTED'
+                      ? '🚨 FAKE GPS TERDETEKSI'
+                      : sub.location_status === 'OUTSIDE_CAMPUS'
+                      ? '⚠️ DI LUAR AREA KAMPUS'
+                      : sub.location_status || '-'}
+                  </span>
+                </div>
+                <div style={{ color: '#475569', marginTop: 3 }}>
+                  {sub.location_distance_meters !== null && sub.location_distance_meters !== undefined && (
+                    <span>
+                      Jarak dari Pusat FSM: <strong>~{sub.location_distance_meters >= 1000 ? (sub.location_distance_meters / 1000).toFixed(2) + ' km' : sub.location_distance_meters + ' meter'}</strong> •{' '}
+                    </span>
+                  )}
+                  {sub.location_accuracy_meters !== null && sub.location_accuracy_meters !== undefined && (
+                    <span>Akurasi GPS: <strong>±{sub.location_accuracy_meters}m</strong> • </span>
+                  )}
+                  <span>IP Jaringan: <strong>{sub.client_ip || '-'}</strong></span>
+                </div>
+              </div>
+              {sub.location_lat && sub.location_lng && (
+                <a
+                  href={`https://www.google.com/maps?q=${sub.location_lat},${sub.location_lng}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="btn btn-xs btn-outline"
+                  style={{ fontWeight: 700, background: '#ffffff', textDecoration: 'none' }}
+                >
+                  🗺️ Buka di Google Maps
+                </a>
+              )}
+            </div>
+          )}
           {entries.map(([qKey, ans], idx) => (
             <div
               key={qKey}
@@ -396,12 +480,16 @@ export function LiveDetailModal({ targetSession, token, onClose }) {
                 background:
                   detail.locationStatus === 'VALID_CAMPUS'
                     ? 'linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%)'
-                    : detail.locationStatus === 'OUTSIDE_CAMPUS'
+                    : detail.locationStatus === 'FAKE_GPS_SPOOF' || detail.locationStatus === 'FAKE_GPS_DETECTED'
                     ? '#fef2f2'
+                    : detail.locationStatus === 'OUTSIDE_CAMPUS'
+                    ? '#fff1f2'
                     : '#f8fafc',
                 border: `1.5px solid ${
                   detail.locationStatus === 'VALID_CAMPUS'
                     ? '#86efac'
+                    : detail.locationStatus === 'FAKE_GPS_SPOOF' || detail.locationStatus === 'FAKE_GPS_DETECTED'
+                    ? '#ef4444'
                     : detail.locationStatus === 'OUTSIDE_CAMPUS'
                     ? '#fca5a5'
                     : '#cbd5e1'
@@ -425,14 +513,25 @@ export function LiveDetailModal({ targetSession, token, onClose }) {
                     className={`badge ${
                       detail.locationStatus === 'VALID_CAMPUS'
                         ? 'badge-success'
-                        : detail.locationStatus === 'OUTSIDE_CAMPUS'
-                        ? 'badge-danger'
-                        : 'badge-neutral'
+                        : 'badge-danger'
                     }`}
-                    style={{ fontSize: '0.72rem', fontWeight: 800 }}
+                    style={{
+                      fontSize: '0.72rem',
+                      fontWeight: 800,
+                      background:
+                        detail.locationStatus === 'FAKE_GPS_SPOOF' || detail.locationStatus === 'FAKE_GPS_DETECTED'
+                          ? '#dc2626'
+                          : undefined,
+                      color:
+                        detail.locationStatus === 'FAKE_GPS_SPOOF' || detail.locationStatus === 'FAKE_GPS_DETECTED'
+                          ? '#ffffff'
+                          : undefined,
+                    }}
                   >
                     {detail.locationStatus === 'VALID_CAMPUS'
                       ? '✅ DI LINGKUNGAN FSM UNDIP'
+                      : detail.locationStatus === 'FAKE_GPS_SPOOF' || detail.locationStatus === 'FAKE_GPS_DETECTED'
+                      ? '🚨 FAKE GPS TERDETEKSI'
                       : detail.locationStatus === 'OUTSIDE_CAMPUS'
                       ? '⚠️ DI LUAR AREA KAMPUS'
                       : detail.locationStatus || 'TIDAK TERDETEKSI'}

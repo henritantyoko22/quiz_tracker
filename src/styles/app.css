@@ -800,11 +800,57 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
 }
 .submit-info {
-  font-size: 0.82rem;
-  color: #64748b;
-  line-height: 1.45;
+  font-size: 0.85rem;
+  color: #475569;
+  line-height: 1.5;
+}
+
+.btn-submit-exam {
+  background: linear-gradient(135deg, #16a34a 0%, #15803d 100%);
+  color: #ffffff;
+  border: none;
+  border-radius: 10px;
+  padding: 13px 26px;
+  font-size: 0.98rem;
+  font-weight: 800;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(22, 163, 74, 0.35);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: all 0.2s ease;
+  min-width: 220px;
+  white-space: nowrap;
+}
+.btn-submit-exam:hover:not(:disabled) {
+  background: linear-gradient(135deg, #15803d 0%, #166534 100%);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 18px rgba(22, 163, 74, 0.45);
+}
+.btn-submit-exam:active:not(:disabled) {
+  transform: translateY(1px);
+  box-shadow: 0 2px 8px rgba(22, 163, 74, 0.3);
+}
+.btn-submit-exam:disabled {
+  background: #94a3b8;
+  cursor: not-allowed;
+  box-shadow: none;
+  opacity: 0.7;
+}
+
+@media (max-width: 640px) {
+  .submit-footer-card {
+    flex-direction: column;
+    align-items: stretch;
+    text-align: center;
+  }
+  .btn-submit-exam {
+    width: 100%;
+  }
 }
 
 /* Toast Notifications Container */

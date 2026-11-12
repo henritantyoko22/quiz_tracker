@@ -519,6 +519,8 @@ export function AdminDashboardPage() {
       const locStatusText =
         s.location_status === 'VALID_CAMPUS'
           ? 'Di Lingkungan FSM Undip'
+          : s.location_status === 'FAKE_GPS_SPOOF' || s.location_status === 'FAKE_GPS_DETECTED'
+          ? '🚨 FAKE GPS TERDETEKSI'
           : s.location_status === 'OUTSIDE_CAMPUS'
           ? 'Di Luar Area Kampus'
           : s.location_status || '-';

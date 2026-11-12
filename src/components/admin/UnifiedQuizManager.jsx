@@ -483,7 +483,7 @@ export function UnifiedQuizManager({ token, quizList, onRefreshQuizList, showToa
                     <span>📍</span> Wajib Lokasi Fisik di FSM Undip (Geofencing)
                   </div>
                   <div style={{ fontSize: '0.76rem', color: '#475569', marginTop: 3 }}>
-                    Hanya mahasiswa yang berada di lingkungan Fakultas Sains dan Matematika Undip yang diizinkan memulai ujian.
+                    Hanya mahasiswa yang berada di lingkungan FSM Undip yang diizinkan memulai ujian. Dilengkapi proteksi Anti-Fake GPS (deteksi Mock Location OS dan validasi silang IP jaringan).
                   </div>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>

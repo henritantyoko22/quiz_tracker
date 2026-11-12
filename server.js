@@ -197,6 +197,78 @@ function getHaversineDistance(lat1, lon1, lat2, lon2) {
   return Math.round(R * c);
 }
 
+// ---------------------------------------------------------------
+// PROTEKSI ANTI-FAKE GPS & TELEMETRI JARINGAN IP
+// ---------------------------------------------------------------
+function extractNetworkTelemetry(req) {
+  const clientIp = (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket.remoteAddress || '-';
+  const ipCity = req.headers['x-vercel-ip-city'] ? decodeURIComponent(req.headers['x-vercel-ip-city']) : null;
+  const ipRegion = req.headers['x-vercel-ip-country-region'] || null;
+  const ipCountry = req.headers['x-vercel-ip-country'] || 'ID';
+  const ipLat = req.headers['x-vercel-ip-latitude'] ? parseFloat(req.headers['x-vercel-ip-latitude']) : null;
+  const ipLng = req.headers['x-vercel-ip-longitude'] ? parseFloat(req.headers['x-vercel-ip-longitude']) : null;
+
+  let ipDistanceToTarget = null;
+  if (ipLat !== null && ipLng !== null && !isNaN(ipLat) && !isNaN(ipLng)) {
+    ipDistanceToTarget = getHaversineDistance(ipLat, ipLng, DEFAULT_FSM_LAT, DEFAULT_FSM_LNG);
+  }
+
+  return {
+    clientIp,
+    ipCity,
+    ipRegion,
+    ipCountry,
+    ipLat,
+    ipLng,
+    ipDistanceToTarget
+  };
+}
+
+function checkFakeGpsAnomaly({ locationLat, locationLng, locationAccuracy, isMock, telemetry, targetLat, targetLng }) {
+  // 1. Sinyal eksplisit Mock Location dari sistem Android / Geolocation API
+  if (isMock === true || isMock === 'true') {
+    return {
+      isFake: true,
+      reason: 'MOCK_FLAG_DETECTED',
+      message: 'Perangkat Anda terdeteksi mengaktifkan fitur Mock Location / Fake GPS.'
+    };
+  }
+
+  // 2. Akurasi GPS tidak wajar (0 meter atau sangat mustahil untuk GPS satelit di dunia nyata)
+  if (locationAccuracy !== null && locationAccuracy !== undefined) {
+    const acc = Number(locationAccuracy);
+    if (acc === 0 || (acc > 0 && acc < 0.5)) {
+      return {
+        isFake: true,
+        reason: 'UNNATURAL_ACCURACY',
+        message: 'Akurasi GPS tidak wajar (±0m). Indikasi kuat simulasi Mock Location.'
+      };
+    }
+  }
+
+  // 3. Ketidaksesuaian Jaringan IP vs Titik Koordinat GPS
+  // Jika GPS mengaku di FSM Undip, namun estimasi IP ISP berada > 85 km (misal Jakarta, Surabaya, Solo, Bandung, dsb)
+  if (
+    locationLat !== null && locationLat !== undefined &&
+    locationLng !== null && locationLng !== undefined &&
+    telemetry && telemetry.ipLat !== null && telemetry.ipLng !== null
+  ) {
+    const ipVsGpsDist = getHaversineDistance(locationLat, locationLng, telemetry.ipLat, telemetry.ipLng);
+    if (ipVsGpsDist !== null && ipVsGpsDist > 85000) { // Jarak > 85 km
+      const distKm = Math.round(ipVsGpsDist / 1000);
+      return {
+        isFake: true,
+        reason: 'IP_GEO_MISMATCH',
+        ipCity: telemetry.ipCity,
+        ipDistKm: distKm,
+        message: `Terdeteksi ketidakcocokan lokasi: Koordinat GPS mengaku di FSM Undip, namun IP jaringan internet Anda berada di area ${telemetry.ipCity || 'luar kota'} (~${distKm} km dari Semarang). Fake GPS terdeteksi.`
+      };
+    }
+  }
+
+  return { isFake: false };
+}
+
 // Mitigasi DoS / OOM: Batasi kapasitas map in-memory
 function enforceLiveSessionsLimit() {
   if (liveStudentSessions.size < MAX_LIVE_SESSIONS) return;
@@ -873,12 +945,22 @@ app.get('/v1/quiz/check-student', async (req, res) => {
   }
 });
 
+// Endpoint telemetri jaringan untuk cross-check IP & proteksi Fake GPS
+app.get('/v1/quiz/network-telemetry', (req, res) => {
+  const telemetry = extractNetworkTelemetry(req);
+  res.json({
+    status: 'success',
+    ...telemetry,
+    serverTime: new Date().toISOString()
+  });
+});
+
 // Menyimpan jawaban kuis peserta (disertai verifikasi integritas & server-enforced proctoring)
 app.post('/v1/quiz/submit', async (req, res) => {
   const {
     userId, nim, quizId, answers, status, violationCount,
     questionTimings, activityLog, durationSeconds, attempt, kelas,
-    locationLat, locationLng, locationAccuracy, locationDistance, locationStatus
+    locationLat, locationLng, locationAccuracy, locationDistance, locationStatus, isMock
   } = req.body;
 
   const clientIp = (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket.remoteAddress || '-';
@@ -916,11 +998,36 @@ app.post('/v1/quiz/submit', async (req, res) => {
     const settingsRecord = setRes.rows[0];
     const studentKelas = kelas || studentRecord.kelas || '-';
 
-    // Verifikasi jarak lokasi server-side ke target FSM Undip
+    // Verifikasi jarak lokasi server-side ke target FSM Undip & Deteksi Fake GPS
     let verifiedDistance = locationDistance !== undefined && locationDistance !== null ? parseInt(locationDistance, 10) : null;
     let finalLocationStatus = locationStatus || 'NOT_RECORDED';
 
-    if (locationLat !== undefined && locationLng !== undefined && locationLat !== null && locationLng !== null) {
+    const telemetry = extractNetworkTelemetry(req);
+    const antiSpoof = checkFakeGpsAnomaly({
+      locationLat,
+      locationLng,
+      locationAccuracy,
+      isMock,
+      telemetry,
+      targetLat: Number(settingsRecord.target_lat) || DEFAULT_FSM_LAT,
+      targetLng: Number(settingsRecord.target_lng) || DEFAULT_FSM_LNG
+    });
+
+    if (antiSpoof.isFake) {
+      finalLocationStatus = 'FAKE_GPS_SPOOF';
+      if (settingsRecord.require_location !== false) {
+        finalStatus = 'DISQUALIFIED';
+      }
+      try {
+        await db.query(
+          `INSERT INTO quiz_violations (user_id, quiz_id, violation_type, detail, occurred_at)
+           VALUES ($1, $2, $3, $4, NOW())`,
+          [cleanNim, cleanQuizId, 'FAKE_GPS_SPOOF', antiSpoof.message]
+        );
+      } catch (violErr) {
+        console.warn('Gagal mencatat pelanggaran fake gps:', violErr.message);
+      }
+    } else if (locationLat !== undefined && locationLng !== undefined && locationLat !== null && locationLng !== null) {
       const targetLat = Number(settingsRecord.target_lat) || DEFAULT_FSM_LAT;
       const targetLng = Number(settingsRecord.target_lng) || DEFAULT_FSM_LNG;
       const targetRadius = Number(settingsRecord.target_radius_meters) || DEFAULT_FSM_RADIUS;
@@ -928,6 +1035,9 @@ app.post('/v1/quiz/submit', async (req, res) => {
       if (calcDist !== null) {
         verifiedDistance = calcDist;
         finalLocationStatus = calcDist <= targetRadius ? 'VALID_CAMPUS' : 'OUTSIDE_CAMPUS';
+        if (calcDist > targetRadius && settingsRecord.require_location !== false) {
+          finalStatus = 'DISQUALIFIED';
+        }
       }
     }
 
@@ -1121,7 +1231,20 @@ app.post('/v1/quiz/live/session', async (req, res) => {
     const safeQTexts = Array.isArray(questionTexts) ? questionTexts.slice(0, 50) : [];
     const clientIp = (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket.remoteAddress || '-';
 
-    const { locationLat, locationLng, locationAccuracy, locationDistance, locationStatus } = req.body;
+    const { locationLat, locationLng, locationAccuracy, locationDistance, locationStatus, isMock } = req.body;
+
+    const telemetry = extractNetworkTelemetry(req);
+    const antiSpoof = checkFakeGpsAnomaly({
+      locationLat,
+      locationLng,
+      locationAccuracy,
+      isMock,
+      telemetry,
+      targetLat: Number(setRes.rows[0]?.target_lat) || DEFAULT_FSM_LAT,
+      targetLng: Number(setRes.rows[0]?.target_lng) || DEFAULT_FSM_LNG
+    });
+
+    const initialLocationStatus = antiSpoof.isFake ? 'FAKE_GPS_SPOOF' : (locationStatus || 'NOT_RECORDED');
 
     liveStudentSessions.set(key, {
       key,
@@ -1147,7 +1270,7 @@ app.post('/v1/quiz/live/session', async (req, res) => {
       locationLng: locationLng !== undefined ? locationLng : null,
       locationAccuracy: locationAccuracy !== undefined ? locationAccuracy : null,
       locationDistance: locationDistance !== undefined ? locationDistance : null,
-      locationStatus: locationStatus || 'NOT_RECORDED',
+      locationStatus: initialLocationStatus,
       clientIp
     });
 
@@ -1168,7 +1291,7 @@ app.post('/v1/quiz/live/heartbeat', (req, res) => {
     status,
     userId, totalQuestions, questionTexts,
     examToken,
-    locationLat, locationLng, locationAccuracy, locationDistance, locationStatus
+    locationLat, locationLng, locationAccuracy, locationDistance, locationStatus, isMock
   } = req.body;
 
   if (!nim || !quizId) {
@@ -1232,7 +1355,23 @@ app.post('/v1/quiz/live/heartbeat', (req, res) => {
   if (locationLng !== undefined) existing.locationLng = locationLng;
   if (locationAccuracy !== undefined) existing.locationAccuracy = locationAccuracy;
   if (locationDistance !== undefined) existing.locationDistance = locationDistance;
-  if (locationStatus) existing.locationStatus = locationStatus;
+
+  const telemetry = extractNetworkTelemetry(req);
+  const antiSpoof = checkFakeGpsAnomaly({
+    locationLat: existing.locationLat,
+    locationLng: existing.locationLng,
+    locationAccuracy: existing.locationAccuracy,
+    isMock,
+    telemetry,
+    targetLat: DEFAULT_FSM_LAT,
+    targetLng: DEFAULT_FSM_LNG
+  });
+
+  if (antiSpoof.isFake) {
+    existing.locationStatus = 'FAKE_GPS_SPOOF';
+  } else if (locationStatus) {
+    existing.locationStatus = locationStatus;
+  }
   existing.clientIp = clientIp;
 
   // Update status (ACTIVE, SUBMITTED, DISQUALIFIED, TIME_EXPIRED)

@@ -80,6 +80,29 @@ export const SubmissionRow = memo(function SubmissionRow({
           >
             Quiz #{sub.quiz_id}
           </span>
+          {(sub.location_status === 'FAKE_GPS_SPOOF' || sub.location_status === 'FAKE_GPS_DETECTED') && (
+            <span
+              className="badge badge-danger"
+              style={{
+                fontSize: '0.7rem',
+                fontWeight: 900,
+                background: '#dc2626',
+                color: '#ffffff',
+                border: '1px solid #991b1b',
+                boxShadow: '0 0 8px rgba(220, 38, 38, 0.45)',
+                cursor: sub.location_lat ? 'pointer' : 'default',
+              }}
+              title="PERINGATAN INTEGRITAS: Mahasiswa terdeteksi menggunakan Fake GPS / manipulasi lokasi!"
+              onClick={(e) => {
+                if (sub.location_lat && sub.location_lng) {
+                  e.stopPropagation();
+                  window.open(`https://www.google.com/maps?q=${sub.location_lat},${sub.location_lng}`, '_blank');
+                }
+              }}
+            >
+              🚨 FAKE GPS TERDETEKSI
+            </span>
+          )}
           {sub.location_status === 'VALID_CAMPUS' && (
             <span
               className="badge badge-success"

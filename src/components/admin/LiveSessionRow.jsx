@@ -64,6 +64,29 @@ export const LiveSessionRow = memo(function LiveSessionRow({ index, session, onV
               🔁 Retake {session.attempt}
             </span>
           )}
+          {(session.locationStatus === 'FAKE_GPS_SPOOF' || session.locationStatus === 'FAKE_GPS_DETECTED') && (
+            <span
+              className="badge badge-danger"
+              style={{
+                fontSize: '0.68rem',
+                fontWeight: 900,
+                background: '#dc2626',
+                color: '#ffffff',
+                border: '1px solid #991b1b',
+                boxShadow: '0 0 8px rgba(220, 38, 38, 0.45)',
+                cursor: session.locationLat ? 'pointer' : 'default',
+              }}
+              title="PERINGATAN INTEGRITAS: Mahasiswa terdeteksi menggunakan Fake GPS / Mock Location!"
+              onClick={(e) => {
+                if (session.locationLat && session.locationLng) {
+                  e.stopPropagation();
+                  window.open(`https://www.google.com/maps?q=${session.locationLat},${session.locationLng}`, '_blank');
+                }
+              }}
+            >
+              🚨 FAKE GPS TERDETEKSI
+            </span>
+          )}
           {session.locationStatus === 'VALID_CAMPUS' && (
             <span
               className="badge badge-success"

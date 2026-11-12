@@ -314,7 +314,7 @@ export function StudentQuizPage() {
     return Math.round(R * c);
   };
 
-  // Fungsi Verifikasi Lokasi Fisik Mahasiswa (Geofencing FSM Undip)
+  // Fungsi Verifikasi Lokasi Fisik Mahasiswa (Geofencing FSM Undip & Anti-Fake GPS)
   const verifyLocation = useCallback(() => {
     if (!navigator.geolocation) {
       const locObj = {
@@ -324,11 +324,12 @@ export function StudentQuizPage() {
         lng: null,
         accuracy: null,
         distance: null,
+        isMock: false,
         status: 'UNSUPPORTED',
         message: 'Browser Anda tidak mendukung deteksi lokasi (Geolocation API). Silakan gunakan Google Chrome atau Microsoft Edge.',
       };
       setLocationState(locObj);
-      locationRef.current = { lat: null, lng: null, accuracy: null, distance: null, status: 'UNSUPPORTED' };
+      locationRef.current = { lat: null, lng: null, accuracy: null, distance: null, isMock: false, status: 'UNSUPPORTED' };
       return;
     }
 
@@ -336,7 +337,7 @@ export function StudentQuizPage() {
       ...prev,
       checking: true,
       status: 'CHECKING',
-      message: 'Mendeteksi titik koordinat Anda melalui GPS/Browser...',
+      message: 'Mendeteksi titik koordinat Anda melalui GPS & verifikasi integritas...',
     }));
 
     const settings = scheduleState.settings || {};
@@ -346,11 +347,61 @@ export function StudentQuizPage() {
     const locName = settings.target_location_name || 'Fakultas Sains dan Matematika (FSM) Undip';
 
     navigator.geolocation.getCurrentPosition(
-      (pos) => {
+      async (pos) => {
         const lat = pos.coords.latitude;
         const lng = pos.coords.longitude;
-        const accuracy = Math.round(pos.coords.accuracy || 0);
+        const rawAccuracy = Number(pos.coords.accuracy || 0);
+        const accuracy = Math.round(rawAccuracy);
         const distance = calculateHaversine(lat, lng, targetLat, targetLng);
+
+        // 1. Deteksi Sinyal Mock Location dari Geolocation Coordinates (Chrome / Android)
+        const isMockFlag = Boolean(pos.coords.isMock || pos.mocked || pos.coords.mocked);
+
+        // 2. Deteksi Anomali Akurasi khas software Fake GPS (akurasi 0m atau < 0.5m mustahil untuk GPS satelit HP)
+        const isSuspiciousAccuracy = rawAccuracy === 0 || (rawAccuracy > 0 && rawAccuracy < 0.5);
+
+        // 3. Validasi Silang Jaringan IP (Cross-check IP Geolocation via server)
+        let isIpMismatch = false;
+        let netTelemetry = null;
+        let ipVsGpsDist = null;
+        try {
+          const tRes = await fetch(`${API_BASE}/v1/quiz/network-telemetry`);
+          if (tRes.ok) {
+            netTelemetry = await tRes.json();
+            if (netTelemetry && netTelemetry.ipLat && netTelemetry.ipLng) {
+              ipVsGpsDist = calculateHaversine(lat, lng, netTelemetry.ipLat, netTelemetry.ipLng);
+              // Jika GPS mengaku di FSM Undip namun IP ISP berada > 85 km (misal Jakarta, Surabaya, Bandung, Solo)
+              if (ipVsGpsDist > 85000) {
+                isIpMismatch = true;
+              }
+            }
+          }
+        } catch (_) {}
+
+        // Evaluasi apakah terdeteksi Fake GPS
+        if (isMockFlag || isSuspiciousAccuracy || isIpMismatch) {
+          const fakeReason = isMockFlag
+            ? 'Terdeteksi sinyal Mock Location / Fake GPS aktif pada perangkat Anda.'
+            : isIpMismatch
+            ? `Ketidakcocokan Jaringan: GPS mengaku di FSM Undip, namun IP jaringan internet Anda terdeteksi di area ${netTelemetry?.ipCity || 'luar Semarang'} (~${Math.round(ipVsGpsDist / 1000)} km dari kampus).`
+            : 'Terdeteksi anomali akurasi GPS (±0m) khas aplikasi pemalsu lokasi.';
+
+          const locObj = {
+            checking: false,
+            verified: false,
+            lat,
+            lng,
+            accuracy,
+            distance,
+            isMock: true,
+            status: 'FAKE_GPS_DETECTED',
+            message: `🚨 PENGGUNAAN FAKE GPS TERDETEKSI: ${fakeReason} Anda WAJIB mematikan aplikasi Fake GPS dan Developer Options, lalu verifikasi ulang secara fisik di lingkungan FSM Undip.`,
+          };
+          setLocationState(locObj);
+          locationRef.current = { lat, lng, accuracy, distance, isMock: true, status: 'FAKE_GPS_DETECTED' };
+          addToast('🚨 PENGGUNAAN FAKE GPS TERDETEKSI! Akses ujian diblokir.', 'danger');
+          return;
+        }
 
         if (distance <= targetRadius) {
           const locObj = {
@@ -360,11 +411,12 @@ export function StudentQuizPage() {
             lng,
             accuracy,
             distance,
+            isMock: false,
             status: 'VALID_CAMPUS',
             message: `Lokasi Terverifikasi: Anda berada di area ${locName} (Jarak ~${distance} meter, akurasi GPS ±${accuracy}m).`,
           };
           setLocationState(locObj);
-          locationRef.current = { lat, lng, accuracy, distance, status: 'VALID_CAMPUS' };
+          locationRef.current = { lat, lng, accuracy, distance, isMock: false, status: 'VALID_CAMPUS' };
           addToast(`✅ Lokasi terverifikasi di area FSM Undip (~${distance}m).`, 'success');
         } else {
           const distLabel = distance >= 1000 ? `${(distance / 1000).toFixed(2)} km` : `${distance} meter`;
@@ -375,11 +427,12 @@ export function StudentQuizPage() {
             lng,
             accuracy,
             distance,
+            isMock: false,
             status: 'OUTSIDE_CAMPUS',
             message: `Akses Ditolak: Anda terdeteksi berada di luar area ${locName} (Jarak terdeteksi: ~${distLabel}). Ujian ini WAJIB dikerjakan langsung di lingkungan FSM Undip (Radius toleransi maksimal ${targetRadius} meter).`,
           };
           setLocationState(locObj);
-          locationRef.current = { lat, lng, accuracy, distance, status: 'OUTSIDE_CAMPUS' };
+          locationRef.current = { lat, lng, accuracy, distance, isMock: false, status: 'OUTSIDE_CAMPUS' };
           addToast(`⛔ Anda berada di luar area FSM Undip (~${distLabel}).`, 'danger');
         }
       },
@@ -403,11 +456,12 @@ export function StudentQuizPage() {
           lng: null,
           accuracy: null,
           distance: null,
+          isMock: false,
           status: st,
           message: msg,
         };
         setLocationState(locObj);
-        locationRef.current = { lat: null, lng: null, accuracy: null, distance: null, status: st };
+        locationRef.current = { lat: null, lng: null, accuracy: null, distance: null, isMock: false, status: st };
         addToast(msg, 'danger');
       },
       {
@@ -498,6 +552,8 @@ export function StudentQuizPage() {
           locationAccuracy: locationRef.current.accuracy,
           locationDistance: locationRef.current.distance,
           locationStatus: locationRef.current.status,
+        isMock: locationRef.current.isMock || false,
+          isMock: locationRef.current.isMock || false,
         }),
       });
     } catch (_) {}
@@ -544,6 +600,7 @@ export function StudentQuizPage() {
         locationAccuracy: locationRef.current.accuracy,
         locationDistance: locationRef.current.distance,
         locationStatus: locationRef.current.status,
+        isMock: locationRef.current.isMock || false,
       };
 
       // Also notify live session immediately
@@ -739,6 +796,8 @@ export function StudentQuizPage() {
           locationAccuracy: locationRef.current.accuracy,
           locationDistance: locationRef.current.distance,
           locationStatus: locationRef.current.status,
+        isMock: locationRef.current.isMock || false,
+          isMock: locationRef.current.isMock || false,
         }),
       });
       const liveData = await liveRes.json();
@@ -1234,12 +1293,16 @@ export function StudentQuizPage() {
                     background:
                       locationState.status === 'VALID_CAMPUS'
                         ? 'linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%)'
+                        : locationState.status === 'FAKE_GPS_DETECTED'
+                        ? '#fef2f2'
                         : locationState.status === 'OUTSIDE_CAMPUS' || locationState.status === 'PERMISSION_DENIED'
                         ? '#fef2f2'
                         : '#f8fafc',
                     border: `1.5px solid ${
                       locationState.status === 'VALID_CAMPUS'
                         ? '#22c55e'
+                        : locationState.status === 'FAKE_GPS_DETECTED'
+                        ? '#ef4444'
                         : locationState.status === 'OUTSIDE_CAMPUS' || locationState.status === 'PERMISSION_DENIED'
                         ? '#f87171'
                         : '#cbd5e1'
@@ -1258,6 +1321,8 @@ export function StudentQuizPage() {
                         color:
                           locationState.status === 'VALID_CAMPUS'
                             ? '#15803d'
+                            : locationState.status === 'FAKE_GPS_DETECTED'
+                            ? '#dc2626'
                             : locationState.status === 'OUTSIDE_CAMPUS' || locationState.status === 'PERMISSION_DENIED'
                             ? '#991b1b'
                             : '#334155',
@@ -1272,6 +1337,8 @@ export function StudentQuizPage() {
                       className={`badge ${
                         locationState.status === 'VALID_CAMPUS'
                           ? 'badge-success'
+                          : locationState.status === 'FAKE_GPS_DETECTED'
+                          ? 'badge-danger'
                           : locationState.status === 'OUTSIDE_CAMPUS'
                           ? 'badge-danger'
                           : locationState.checking
@@ -1284,6 +1351,8 @@ export function StudentQuizPage() {
                         ? '⏳ MENDETEKSI'
                         : locationState.status === 'VALID_CAMPUS'
                         ? '✅ DI LINGKUNGAN FSM'
+                        : locationState.status === 'FAKE_GPS_DETECTED'
+                        ? '🚨 FAKE GPS TERDETEKSI'
                         : locationState.status === 'OUTSIDE_CAMPUS'
                         ? '⛔ DI LUAR KAMPUS'
                         : locationState.status === 'PERMISSION_DENIED'
@@ -1394,6 +1463,8 @@ export function StudentQuizPage() {
                   : scheduleState.settings?.require_location !== false && !locationState.verified
                   ? locationState.checking
                     ? '⏳ Mendeteksi Lokasi FSM Undip...'
+                    : locationState.status === 'FAKE_GPS_DETECTED'
+                    ? '🚨 Fake GPS Terdeteksi (Akses Ditolak)'
                     : locationState.status === 'OUTSIDE_CAMPUS'
                     ? '⛔ Di Luar Area FSM Undip (Akses Terkunci)'
                     : locationState.status === 'PERMISSION_DENIED'
@@ -1435,19 +1506,18 @@ export function StudentQuizPage() {
 
             <div className="submit-footer-card">
               <div className="submit-info">
-                Pastikan seluruh jawaban telah terisi. Klik tombol di samping untuk
-                mengirim jawaban langsung ke server tanpa popup konfirmasi.
+                Pastikan seluruh jawaban telah terisi dengan baik. Klik tombol di samping untuk
+                mengirimkan seluruh lembar jawaban ujian langsung ke server.
               </div>
               <button
                 type="button"
-                className="btn-touchable"
-                style={{ width: 'auto', minWidth: 220 }}
+                className="btn btn-touchable btn-submit-exam"
                 disabled={submitting}
                 onClick={() =>
                   executeSubmitQuiz('COMPLETED', 'Dikirim langsung oleh mahasiswa')
                 }
               >
-                {submitting ? 'Mengirim Jawaban...' : 'Kirim Jawaban Ujian'}
+                {submitting ? '⏳ Mengirim Jawaban...' : 'Kirim Jawaban Ujian'}
               </button>
             </div>
           </div>
@@ -1507,7 +1577,14 @@ export function StudentQuizPage() {
             {!finishSummary.sentSuccess && (
               <button
                 type="button"
-                className="btn-touchable"
+                className="btn btn-touchable btn-primary"
+                style={{
+                  padding: '12px 24px',
+                  borderRadius: 10,
+                  fontWeight: 800,
+                  fontSize: '0.95rem',
+                  boxShadow: '0 4px 12px rgba(79, 70, 229, 0.3)',
+                }}
                 onClick={async () => {
                   setSubmitting(true);
                   try {
@@ -1525,7 +1602,7 @@ export function StudentQuizPage() {
                 }}
                 disabled={submitting}
               >
-                {submitting ? 'Mencoba Kirim Ulang...' : 'Kirim Ulang Jawaban Sekarang'}
+                {submitting ? '⏳ Mencoba Kirim Ulang...' : '🔄 Kirim Ulang Jawaban Sekarang'}
               </button>
             )}
           </div>
