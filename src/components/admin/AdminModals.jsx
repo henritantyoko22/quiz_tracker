@@ -389,6 +389,82 @@ export function LiveDetailModal({ targetSession, token, onClose }) {
             </div>
           </div>
 
+          {/* PRESENSI LOKASI FISIK & JARINGAN MAHASISWA */}
+          {(detail.locationStatus || detail.clientIp) && (
+            <div
+              style={{
+                background:
+                  detail.locationStatus === 'VALID_CAMPUS'
+                    ? 'linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%)'
+                    : detail.locationStatus === 'OUTSIDE_CAMPUS'
+                    ? '#fef2f2'
+                    : '#f8fafc',
+                border: `1.5px solid ${
+                  detail.locationStatus === 'VALID_CAMPUS'
+                    ? '#86efac'
+                    : detail.locationStatus === 'OUTSIDE_CAMPUS'
+                    ? '#fca5a5'
+                    : '#cbd5e1'
+                }`,
+                borderRadius: 10,
+                padding: '10px 14px',
+                marginBottom: 16,
+                fontSize: '0.82rem',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                flexWrap: 'wrap',
+                gap: 8,
+              }}
+            >
+              <div>
+                <div style={{ fontWeight: 800, color: '#0f172a', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span>📍</span>
+                  Presensi Lokasi Fisik:
+                  <span
+                    className={`badge ${
+                      detail.locationStatus === 'VALID_CAMPUS'
+                        ? 'badge-success'
+                        : detail.locationStatus === 'OUTSIDE_CAMPUS'
+                        ? 'badge-danger'
+                        : 'badge-neutral'
+                    }`}
+                    style={{ fontSize: '0.72rem', fontWeight: 800 }}
+                  >
+                    {detail.locationStatus === 'VALID_CAMPUS'
+                      ? '✅ DI LINGKUNGAN FSM UNDIP'
+                      : detail.locationStatus === 'OUTSIDE_CAMPUS'
+                      ? '⚠️ DI LUAR AREA KAMPUS'
+                      : detail.locationStatus || 'TIDAK TERDETEKSI'}
+                  </span>
+                </div>
+                <div style={{ color: '#475569', marginTop: 3 }}>
+                  {detail.locationDistance !== null && detail.locationDistance !== undefined && (
+                    <span>
+                      Jarak dari Pusat FSM Undip: <strong>~{detail.locationDistance >= 1000 ? (detail.locationDistance / 1000).toFixed(2) + ' km' : detail.locationDistance + ' meter'}</strong> •{' '}
+                    </span>
+                  )}
+                  {detail.locationAccuracy !== null && detail.locationAccuracy !== undefined && (
+                    <span>Akurasi GPS: <strong>±{detail.locationAccuracy}m</strong> • </span>
+                  )}
+                  <span>IP Address: <strong>{detail.clientIp || '-'}</strong></span>
+                </div>
+              </div>
+
+              {detail.locationLat && detail.locationLng && (
+                <a
+                  href={`https://www.google.com/maps?q=${detail.locationLat},${detail.locationLng}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="btn btn-xs btn-outline"
+                  style={{ fontWeight: 700, background: '#ffffff', textDecoration: 'none' }}
+                >
+                  🗺️ Buka di Google Maps
+                </a>
+              )}
+            </div>
+          )}
+
           {/* SECTION 1: BREAKDOWN DURASI PER SOAL (GRID CARDS) */}
           <div style={{ marginBottom: 18 }}>
             <div style={{ fontWeight: 800, fontSize: '0.88rem', color: '#0f172a', marginBottom: 10 }}>

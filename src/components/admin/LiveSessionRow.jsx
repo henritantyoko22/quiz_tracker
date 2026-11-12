@@ -64,6 +64,36 @@ export const LiveSessionRow = memo(function LiveSessionRow({ index, session, onV
               🔁 Retake {session.attempt}
             </span>
           )}
+          {session.locationStatus === 'VALID_CAMPUS' && (
+            <span
+              className="badge badge-success"
+              style={{ fontSize: '0.68rem', fontWeight: 800, cursor: session.locationLat ? 'pointer' : 'default' }}
+              title={`Presensi Lokasi: Terverifikasi di area FSM Undip (~${session.locationDistance || 0}m)`}
+              onClick={(e) => {
+                if (session.locationLat && session.locationLng) {
+                  e.stopPropagation();
+                  window.open(`https://www.google.com/maps?q=${session.locationLat},${session.locationLng}`, '_blank');
+                }
+              }}
+            >
+              📍 FSM Undip {session.locationDistance ? `(~${session.locationDistance}m)` : ''}
+            </span>
+          )}
+          {session.locationStatus === 'OUTSIDE_CAMPUS' && (
+            <span
+              className="badge badge-danger"
+              style={{ fontSize: '0.68rem', fontWeight: 800, cursor: session.locationLat ? 'pointer' : 'default' }}
+              title={`Peringatan: Terdeteksi di luar area FSM Undip (~${session.locationDistance || 0}m)`}
+              onClick={(e) => {
+                if (session.locationLat && session.locationLng) {
+                  e.stopPropagation();
+                  window.open(`https://www.google.com/maps?q=${session.locationLat},${session.locationLng}`, '_blank');
+                }
+              }}
+            >
+              ⚠️ Luar FSM {session.locationDistance ? `(~${session.locationDistance >= 1000 ? (session.locationDistance/1000).toFixed(1) + 'km' : session.locationDistance + 'm'})` : ''}
+            </span>
+          )}
         </div>
       </td>
       <td>

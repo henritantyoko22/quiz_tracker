@@ -483,6 +483,9 @@ export function AdminDashboardPage() {
       'Catatan / Feedback Dosen',
       'Durasi Pengerjaan',
       'Pelanggaran',
+      'Lokasi Presensi',
+      'Jarak ke FSM Undip (meter)',
+      'Alamat IP',
     ];
 
     for (let q = 1; q <= maxQ; q++) {
@@ -513,6 +516,13 @@ export function AdminDashboardPage() {
           ? formatDuration(Number(s.duration_seconds))
           : '-';
 
+      const locStatusText =
+        s.location_status === 'VALID_CAMPUS'
+          ? 'Di Lingkungan FSM Undip'
+          : s.location_status === 'OUTSIDE_CAMPUS'
+          ? 'Di Luar Area Kampus'
+          : s.location_status || '-';
+
       const row = [
         idx + 1,
         escapeCsv(s.nim || ''),
@@ -525,6 +535,9 @@ export function AdminDashboardPage() {
         escapeCsv(s.feedback || ''),
         escapeCsv(durText),
         `${s.violation_count || 0}x`,
+        escapeCsv(locStatusText),
+        s.location_distance_meters !== null && s.location_distance_meters !== undefined ? s.location_distance_meters : '',
+        escapeCsv(s.client_ip || ''),
       ];
 
       for (let q = 1; q <= maxQ; q++) {

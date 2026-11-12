@@ -54,6 +54,18 @@ export function StudentQuizPage() {
     error: '',
   });
 
+  // Validasi Presensi Lokasi Fisik Geofencing (FSM Undip)
+  const [locationState, setLocationState] = useState({
+    checking: false,
+    verified: false,
+    lat: null,
+    lng: null,
+    accuracy: null,
+    distance: null,
+    status: 'IDLE', // 'IDLE' | 'CHECKING' | 'VALID_CAMPUS' | 'OUTSIDE_CAMPUS' | 'PERMISSION_DENIED' | 'UNSUPPORTED' | 'ERROR'
+    message: '',
+  });
+
   // Mutable Refs for Memory-Efficient Timers & Heartbeat
   const examTokenRef = useRef('');
   const sessionStartMsRef = useRef(0);
@@ -65,6 +77,13 @@ export function StudentQuizPage() {
   const isExamActiveRef = useRef(false);
   const answersRef = useRef({});
   const countsRef = useRef({ tab: 0, copy: 0, total: 0, max: 3 });
+  const locationRef = useRef({
+    lat: null,
+    lng: null,
+    accuracy: null,
+    distance: null,
+    status: 'NOT_RECORDED',
+  });
   const identityRef = useRef({
     name: '',
     nim: '',
@@ -278,6 +297,153 @@ export function StudentQuizPage() {
     return () => clearTimeout(timer);
   }, [nim, quizId, stage]);
 
+  // Helper hitung jarak lingkaran bumi (Haversine Formula) dalam satuan meter
+  const calculateHaversine = (lat1, lon1, lat2, lon2) => {
+    if (lat1 === null || lon1 === null || lat2 === null || lon2 === null) return 999999;
+    const R = 6371e3; // radius bumi dalam meter
+    const φ1 = (Number(lat1) * Math.PI) / 180;
+    const φ2 = (Number(lat2) * Math.PI) / 180;
+    const Δφ = ((Number(lat2) - Number(lat1)) * Math.PI) / 180;
+    const Δλ = ((Number(lon2) - Number(lon1)) * Math.PI) / 180;
+
+    const a =
+      Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+      Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+    return Math.round(R * c);
+  };
+
+  // Fungsi Verifikasi Lokasi Fisik Mahasiswa (Geofencing FSM Undip)
+  const verifyLocation = useCallback(() => {
+    if (!navigator.geolocation) {
+      const locObj = {
+        checking: false,
+        verified: false,
+        lat: null,
+        lng: null,
+        accuracy: null,
+        distance: null,
+        status: 'UNSUPPORTED',
+        message: 'Browser Anda tidak mendukung deteksi lokasi (Geolocation API). Silakan gunakan Google Chrome atau Microsoft Edge.',
+      };
+      setLocationState(locObj);
+      locationRef.current = { lat: null, lng: null, accuracy: null, distance: null, status: 'UNSUPPORTED' };
+      return;
+    }
+
+    setLocationState((prev) => ({
+      ...prev,
+      checking: true,
+      status: 'CHECKING',
+      message: 'Mendeteksi titik koordinat Anda melalui GPS/Browser...',
+    }));
+
+    const settings = scheduleState.settings || {};
+    const targetLat = Number(settings.target_lat) || -7.050500;
+    const targetLng = Number(settings.target_lng) || 110.443800;
+    const targetRadius = Number(settings.target_radius_meters) || 450;
+    const locName = settings.target_location_name || 'Fakultas Sains dan Matematika (FSM) Undip';
+
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const lat = pos.coords.latitude;
+        const lng = pos.coords.longitude;
+        const accuracy = Math.round(pos.coords.accuracy || 0);
+        const distance = calculateHaversine(lat, lng, targetLat, targetLng);
+
+        if (distance <= targetRadius) {
+          const locObj = {
+            checking: false,
+            verified: true,
+            lat,
+            lng,
+            accuracy,
+            distance,
+            status: 'VALID_CAMPUS',
+            message: `Lokasi Terverifikasi: Anda berada di area ${locName} (Jarak ~${distance} meter, akurasi GPS ±${accuracy}m).`,
+          };
+          setLocationState(locObj);
+          locationRef.current = { lat, lng, accuracy, distance, status: 'VALID_CAMPUS' };
+          addToast(`✅ Lokasi terverifikasi di area FSM Undip (~${distance}m).`, 'success');
+        } else {
+          const distLabel = distance >= 1000 ? `${(distance / 1000).toFixed(2)} km` : `${distance} meter`;
+          const locObj = {
+            checking: false,
+            verified: false,
+            lat,
+            lng,
+            accuracy,
+            distance,
+            status: 'OUTSIDE_CAMPUS',
+            message: `Akses Ditolak: Anda terdeteksi berada di luar area ${locName} (Jarak terdeteksi: ~${distLabel}). Ujian ini WAJIB dikerjakan langsung di lingkungan FSM Undip (Radius toleransi maksimal ${targetRadius} meter).`,
+          };
+          setLocationState(locObj);
+          locationRef.current = { lat, lng, accuracy, distance, status: 'OUTSIDE_CAMPUS' };
+          addToast(`⛔ Anda berada di luar area FSM Undip (~${distLabel}).`, 'danger');
+        }
+      },
+      (err) => {
+        let msg = 'Gagal mendeteksi lokasi.';
+        let st = 'ERROR';
+        if (err.code === 1) {
+          st = 'PERMISSION_DENIED';
+          msg = `Izin lokasi ditolak oleh browser. Ujian ini WAJIB memverifikasi kehadiran fisik di area ${locName}. Silakan klik ikon gembok 🔒 di address bar browser, ubah Location menjadi "Allow / Izinkan", lalu klik Verifikasi Ulang.`;
+        } else if (err.code === 2) {
+          st = 'UNAVAILABLE';
+          msg = 'Informasi lokasi tidak tersedia. Pastikan Location / GPS pada perangkat Anda aktif.';
+        } else if (err.code === 3) {
+          st = 'TIMEOUT';
+          msg = 'Waktu permintaan lokasi habis (timeout). Silakan klik Verifikasi Ulang.';
+        }
+        const locObj = {
+          checking: false,
+          verified: false,
+          lat: null,
+          lng: null,
+          accuracy: null,
+          distance: null,
+          status: st,
+          message: msg,
+        };
+        setLocationState(locObj);
+        locationRef.current = { lat: null, lng: null, accuracy: null, distance: null, status: st };
+        addToast(msg, 'danger');
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 15000,
+        maximumAge: 0,
+      }
+    );
+  }, [scheduleState.settings, addToast]);
+
+  // Otomatis memicu deteksi lokasi saat NIM terverifikasi dan ID Quiz valid
+  useEffect(() => {
+    if (stage !== 'LOGIN') return;
+    if (
+      studentCheck.verified &&
+      scheduleState.valid &&
+      !locationState.verified &&
+      !locationState.checking &&
+      locationState.status === 'IDLE'
+    ) {
+      const isReq = scheduleState.settings?.require_location !== false;
+      if (isReq) {
+        verifyLocation();
+      }
+    }
+  }, [
+    stage,
+    studentCheck.verified,
+    scheduleState.valid,
+    locationState.verified,
+    locationState.checking,
+    locationState.status,
+    scheduleState.settings,
+    verifyLocation,
+  ]);
+
   // Live Heartbeat Sender matching server.js contract
   const sendHeartbeat = useCallback(async (statusOverride = 'ACTIVE', extraEvent = null) => {
     if (!identityRef.current.nim || !identityRef.current.quizId) return;
@@ -327,6 +493,11 @@ export function StudentQuizPage() {
           activityLog: activityLogRef.current,
           remainingSeconds: remSec,
           violationCount: countsRef.current.total,
+          locationLat: locationRef.current.lat,
+          locationLng: locationRef.current.lng,
+          locationAccuracy: locationRef.current.accuracy,
+          locationDistance: locationRef.current.distance,
+          locationStatus: locationRef.current.status,
         }),
       });
     } catch (_) {}
@@ -368,6 +539,11 @@ export function StudentQuizPage() {
         questionTimings: questionTimingsRef.current,
         activityLog: activityLogRef.current,
         durationSeconds,
+        locationLat: locationRef.current.lat,
+        locationLng: locationRef.current.lng,
+        locationAccuracy: locationRef.current.accuracy,
+        locationDistance: locationRef.current.distance,
+        locationStatus: locationRef.current.status,
       };
 
       // Also notify live session immediately
@@ -495,12 +671,22 @@ export function StudentQuizPage() {
       return;
     }
 
+    const settings = scheduleState.settings || {};
+    const isLocationRequired = settings.require_location !== false;
+    if (isLocationRequired && !locationState.verified) {
+      addToast(
+        locationState.message ||
+          'Anda WAJIB memverifikasi presensi lokasi di lingkungan FSM Undip sebelum memulai ujian.',
+        'danger'
+      );
+      return;
+    }
+
     const cleanName = studentName.trim();
     const cleanNim = nim.trim();
     const cleanQuizId = quizId.trim();
     if (!cleanName || !cleanNim || !cleanQuizId) return;
 
-    const settings = scheduleState.settings || {};
     const questions = scheduleState.questions || [];
     const durationMs = (Number(settings.duration_minutes) || 60) * 60 * 1000;
 
@@ -548,6 +734,11 @@ export function StudentQuizPage() {
           isRetake: !!studentCheck.isRetake,
           totalQuestions: questions.length,
           questionTexts: qTexts,
+          locationLat: locationRef.current.lat,
+          locationLng: locationRef.current.lng,
+          locationAccuracy: locationRef.current.accuracy,
+          locationDistance: locationRef.current.distance,
+          locationStatus: locationRef.current.status,
         }),
       });
       const liveData = await liveRes.json();
@@ -1035,6 +1226,117 @@ export function StudentQuizPage() {
               )}
 
               {/* ======================================================== */}
+              {/* VALIDASI PRESENSI LOKASI FISIK (GEOFENCING FSM UNDIP)    */}
+              {/* ======================================================== */}
+              {studentCheck.verified && quizId.trim() && scheduleState.valid && studentCheck.canStart && (
+                <div
+                  style={{
+                    background:
+                      locationState.status === 'VALID_CAMPUS'
+                        ? 'linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%)'
+                        : locationState.status === 'OUTSIDE_CAMPUS' || locationState.status === 'PERMISSION_DENIED'
+                        ? '#fef2f2'
+                        : '#f8fafc',
+                    border: `1.5px solid ${
+                      locationState.status === 'VALID_CAMPUS'
+                        ? '#22c55e'
+                        : locationState.status === 'OUTSIDE_CAMPUS' || locationState.status === 'PERMISSION_DENIED'
+                        ? '#f87171'
+                        : '#cbd5e1'
+                    }`,
+                    borderRadius: 12,
+                    padding: '13px 16px',
+                    marginBottom: 16,
+                    boxShadow: '0 2px 8px rgba(0,0,0,0.03)',
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6, flexWrap: 'wrap', gap: 6 }}>
+                    <span
+                      style={{
+                        fontWeight: 800,
+                        fontSize: '0.86rem',
+                        color:
+                          locationState.status === 'VALID_CAMPUS'
+                            ? '#15803d'
+                            : locationState.status === 'OUTSIDE_CAMPUS' || locationState.status === 'PERMISSION_DENIED'
+                            ? '#991b1b'
+                            : '#334155',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 6,
+                      }}
+                    >
+                      <span>📍</span> PRESENSI LOKASI FISIK (FSM UNDIP)
+                    </span>
+                    <span
+                      className={`badge ${
+                        locationState.status === 'VALID_CAMPUS'
+                          ? 'badge-success'
+                          : locationState.status === 'OUTSIDE_CAMPUS'
+                          ? 'badge-danger'
+                          : locationState.checking
+                          ? 'badge-info'
+                          : 'badge-neutral'
+                      }`}
+                      style={{ fontSize: '0.74rem', fontWeight: 800 }}
+                    >
+                      {locationState.checking
+                        ? '⏳ MENDETEKSI'
+                        : locationState.status === 'VALID_CAMPUS'
+                        ? '✅ DI LINGKUNGAN FSM'
+                        : locationState.status === 'OUTSIDE_CAMPUS'
+                        ? '⛔ DI LUAR KAMPUS'
+                        : locationState.status === 'PERMISSION_DENIED'
+                        ? '🔒 IZIN DITOLAK'
+                        : 'BELUM DIVERIFIKASI'}
+                    </span>
+                  </div>
+
+                  <div style={{ fontSize: '0.82rem', color: '#334155', lineHeight: 1.45, marginBottom: 8 }}>
+                    {locationState.message ||
+                      'Ujian ini WAJIB dikerjakan langsung di dalam lingkungan Fakultas Sains dan Matematika Undip (Radius maksimal 450 meter).'}
+                  </div>
+
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <button
+                      type="button"
+                      className="btn btn-outline btn-xs btn-touchable"
+                      onClick={verifyLocation}
+                      disabled={locationState.checking}
+                      style={{
+                        fontWeight: 700,
+                        background: locationState.status === 'VALID_CAMPUS' ? '#ffffff' : '#4f46e5',
+                        color: locationState.status === 'VALID_CAMPUS' ? '#1e293b' : '#ffffff',
+                        borderColor: locationState.status === 'VALID_CAMPUS' ? '#cbd5e1' : '#4f46e5',
+                      }}
+                    >
+                      {locationState.checking
+                        ? '⏳ Mendeteksi...'
+                        : locationState.status === 'VALID_CAMPUS'
+                        ? '🔄 Perbarui Lokasi Saya'
+                        : '📍 Verifikasi Lokasi Saya'}
+                    </button>
+
+                    {locationState.lat && locationState.lng && (
+                      <a
+                        href={`https://www.google.com/maps?q=${locationState.lat},${locationState.lng}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        style={{
+                          fontSize: '0.76rem',
+                          color: '#4f46e5',
+                          textDecoration: 'underline',
+                          fontWeight: 600,
+                        }}
+                      >
+                        🗺️ Buka di Google Maps
+                      </a>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* ======================================================== */}
               {/* LANGKAH 3: TOMBOL MULAI UJIAN                             */}
               {/* ======================================================== */}
               <button
@@ -1046,7 +1348,8 @@ export function StudentQuizPage() {
                   !scheduleState.valid ||
                   scheduleState.loading ||
                   !studentCheck.canStart ||
-                  studentCheck.loading
+                  studentCheck.loading ||
+                  (scheduleState.settings?.require_location !== false && !locationState.verified)
                 }
                 style={{
                   width: '100%',
@@ -1060,7 +1363,8 @@ export function StudentQuizPage() {
                     !scheduleState.valid ||
                     scheduleState.loading ||
                     !studentCheck.canStart ||
-                    studentCheck.loading
+                    studentCheck.loading ||
+                    (scheduleState.settings?.require_location !== false && !locationState.verified)
                       ? 0.6
                       : 1,
                   cursor:
@@ -1069,7 +1373,8 @@ export function StudentQuizPage() {
                     !scheduleState.valid ||
                     scheduleState.loading ||
                     !studentCheck.canStart ||
-                    studentCheck.loading
+                    studentCheck.loading ||
+                    (scheduleState.settings?.require_location !== false && !locationState.verified)
                       ? 'not-allowed'
                       : 'pointer',
                 }}
@@ -1086,9 +1391,17 @@ export function StudentQuizPage() {
                   ? 'ID Quiz Tidak Ditemukan di Database'
                   : !studentCheck.canStart
                   ? 'Sudah Pernah Mengerjakan Kuis Ini'
+                  : scheduleState.settings?.require_location !== false && !locationState.verified
+                  ? locationState.checking
+                    ? '⏳ Mendeteksi Lokasi FSM Undip...'
+                    : locationState.status === 'OUTSIDE_CAMPUS'
+                    ? '⛔ Di Luar Area FSM Undip (Akses Terkunci)'
+                    : locationState.status === 'PERMISSION_DENIED'
+                    ? '🔒 Izinkan Akses Lokasi untuk Mulai'
+                    : '📍 Verifikasi Lokasi FSM Undip Terlebih Dahulu'
                   : studentCheck.isRetake
-                  ? 'Mulai Kerjakan Retake Ujian (Ke-2)'
-                  : 'Mulai Kerjakan Ujian Sekarang'}
+                  ? '🚀 Mulai Kerjakan Retake Ujian (Ke-2)'
+                  : '🚀 Mulai Kerjakan Ujian Sekarang'}
               </button>
             </form>
           </div>

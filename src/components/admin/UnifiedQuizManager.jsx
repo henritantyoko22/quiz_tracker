@@ -11,6 +11,8 @@ export function UnifiedQuizManager({ token, quizList, onRefreshQuizList, showToa
   const [isActive, setIsActive] = useState(true);
   const [startTime, setStartTime] = useState('');
   const [endTime, setEndTime] = useState('');
+  const [requireLocation, setRequireLocation] = useState(true);
+  const [targetRadiusMeters, setTargetRadiusMeters] = useState(450);
 
   // Gemini AI Auto-Grading state
   const [gradingRubric, setGradingRubric] = useState('');
@@ -105,6 +107,8 @@ export function UnifiedQuizManager({ token, quizList, onRefreshQuizList, showToa
               ? s.gemini_model
               : 'gemini-2.5-flash'
           );
+          setRequireLocation(s.require_location !== false);
+          setTargetRadiusMeters(s.target_radius_meters ?? 450);
         } else {
           setDurationMinutes(30);
           setMaxViolations(3);
@@ -113,6 +117,8 @@ export function UnifiedQuizManager({ token, quizList, onRefreshQuizList, showToa
           setEndTime('');
           setGradingRubric('');
           setAutoGrade(false);
+          setRequireLocation(true);
+          setTargetRadiusMeters(450);
         }
 
         const rawQuestions = Array.isArray(qData.data) ? qData.data : [];
@@ -246,6 +252,11 @@ export function UnifiedQuizManager({ token, quizList, onRefreshQuizList, showToa
           autoGrade: Boolean(autoGrade),
           geminiApiKey,
           geminiModel,
+          requireLocation: Boolean(requireLocation),
+          targetLat: -7.050500,
+          targetLng: 110.443800,
+          targetRadiusMeters: Number(targetRadiusMeters) || 450,
+          targetLocationName: 'Fakultas Sains dan Matematika (FSM) Undip',
         }),
       });
       const settingsData = await settingsRes.json();
@@ -441,6 +452,72 @@ export function UnifiedQuizManager({ token, quizList, onRefreshQuizList, showToa
                   value={endTime}
                   onChange={(e) => setEndTime(e.target.value)}
                 />
+              </div>
+
+              {/* Geofencing FSM Undip Setting */}
+              <div
+                style={{
+                  gridColumn: 'span 2',
+                  background: requireLocation ? '#f0fdf4' : '#f8fafc',
+                  border: `1.5px solid ${requireLocation ? '#86efac' : '#cbd5e1'}`,
+                  borderRadius: 10,
+                  padding: '12px 14px',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  gap: 12,
+                  marginTop: 6,
+                }}
+              >
+                <div>
+                  <div
+                    style={{
+                      fontWeight: 800,
+                      fontSize: '0.86rem',
+                      color: requireLocation ? '#15803d' : '#334155',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 6,
+                    }}
+                  >
+                    <span>📍</span> Wajib Lokasi Fisik di FSM Undip (Geofencing)
+                  </div>
+                  <div style={{ fontSize: '0.76rem', color: '#475569', marginTop: 3 }}>
+                    Hanya mahasiswa yang berada di lingkungan Fakultas Sains dan Matematika Undip yang diizinkan memulai ujian.
+                  </div>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <label style={{ fontSize: '0.76rem', fontWeight: 700, color: '#334155' }}>
+                      Radius:
+                    </label>
+                    <input
+                      type="number"
+                      min="50"
+                      max="5000"
+                      value={targetRadiusMeters}
+                      onChange={(e) => setTargetRadiusMeters(e.target.value)}
+                      disabled={!requireLocation}
+                      style={{
+                        width: 72,
+                        padding: '4px 8px',
+                        borderRadius: 6,
+                        border: '1px solid #cbd5e1',
+                        fontSize: '0.8rem',
+                        fontWeight: 700,
+                      }}
+                    />
+                    <span style={{ fontSize: '0.74rem', color: '#64748b' }}>meter</span>
+                  </div>
+                  <label className="toggle-switch" style={{ cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={requireLocation}
+                      onChange={(e) => setRequireLocation(e.target.checked)}
+                      style={{ width: 18, height: 18, accentColor: '#16a34a' }}
+                    />
+                  </label>
+                </div>
               </div>
             </div>
           </div>

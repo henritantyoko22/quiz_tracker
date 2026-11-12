@@ -80,6 +80,36 @@ export const SubmissionRow = memo(function SubmissionRow({
           >
             Quiz #{sub.quiz_id}
           </span>
+          {sub.location_status === 'VALID_CAMPUS' && (
+            <span
+              className="badge badge-success"
+              style={{ fontSize: '0.7rem', fontWeight: 800, cursor: sub.location_lat ? 'pointer' : 'default' }}
+              title={`Presensi Lokasi: Terverifikasi di area FSM Undip (~${sub.location_distance_meters || 0}m)`}
+              onClick={(e) => {
+                if (sub.location_lat && sub.location_lng) {
+                  e.stopPropagation();
+                  window.open(`https://www.google.com/maps?q=${sub.location_lat},${sub.location_lng}`, '_blank');
+                }
+              }}
+            >
+              📍 FSM Undip {sub.location_distance_meters ? `(~${sub.location_distance_meters}m)` : ''}
+            </span>
+          )}
+          {sub.location_status === 'OUTSIDE_CAMPUS' && (
+            <span
+              className="badge badge-danger"
+              style={{ fontSize: '0.7rem', fontWeight: 800, cursor: sub.location_lat ? 'pointer' : 'default' }}
+              title={`Peringatan: Di luar area FSM Undip (~${sub.location_distance_meters || 0}m)`}
+              onClick={(e) => {
+                if (sub.location_lat && sub.location_lng) {
+                  e.stopPropagation();
+                  window.open(`https://www.google.com/maps?q=${sub.location_lat},${sub.location_lng}`, '_blank');
+                }
+              }}
+            >
+              ⚠️ Luar FSM {sub.location_distance_meters ? `(~${sub.location_distance_meters >= 1000 ? (sub.location_distance_meters/1000).toFixed(1) + 'km' : sub.location_distance_meters + 'm'})` : ''}
+            </span>
+          )}
         </div>
       </td>
       <td>

@@ -165,6 +165,38 @@ function getLiveSessionKey(nim, quizId) {
   return `${(nim || '').trim()}_${(quizId || '').trim()}`;
 }
 
+// ---------------------------------------------------------------
+// GEOFENCING FSM UNDIP (TEMBALANG, SEMARANG)
+// ---------------------------------------------------------------
+// Titik pusat: Fakultas Sains dan Matematika Universitas Diponegoro
+const DEFAULT_FSM_LAT = -7.050500;
+const DEFAULT_FSM_LNG = 110.443800;
+const DEFAULT_FSM_RADIUS = 450; // Radius 450 meter mencakup seluruh gedung perkuliahan, lab, & dekanat FSM
+const DEFAULT_FSM_NAME = 'Fakultas Sains dan Matematika (FSM) Undip';
+
+// Hitung jarak lingkaran bumi (Haversine Formula) dalam satuan meter
+function getHaversineDistance(lat1, lon1, lat2, lon2) {
+  if (lat1 === null || lon1 === null || lat2 === null || lon2 === null || lat1 === undefined || lon1 === undefined) return null;
+  const nLat1 = Number(lat1);
+  const nLon1 = Number(lon1);
+  const nLat2 = Number(lat2);
+  const nLon2 = Number(lon2);
+  if (isNaN(nLat1) || isNaN(nLon1) || isNaN(nLat2) || isNaN(nLon2)) return null;
+
+  const R = 6371e3; // radius bumi dalam meter
+  const φ1 = (nLat1 * Math.PI) / 180;
+  const φ2 = (nLat2 * Math.PI) / 180;
+  const Δφ = ((nLat2 - nLat1) * Math.PI) / 180;
+  const Δλ = ((nLon2 - nLon1) * Math.PI) / 180;
+
+  const a =
+    Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+    Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+  return Math.round(R * c);
+}
+
 // Mitigasi DoS / OOM: Batasi kapasitas map in-memory
 function enforceLiveSessionsLimit() {
   if (liveStudentSessions.size < MAX_LIVE_SESSIONS) return;
@@ -326,6 +358,54 @@ async function initDbTables() {
       ADD COLUMN IF NOT EXISTS kelas VARCHAR(10);
     `);
 
+    // Kolom Geofencing / Validasi Lokasi Fisik di quiz_settings
+    await db.query(`
+      ALTER TABLE quiz_settings 
+      ADD COLUMN IF NOT EXISTS require_location BOOLEAN DEFAULT TRUE;
+    `);
+    await db.query(`
+      ALTER TABLE quiz_settings 
+      ADD COLUMN IF NOT EXISTS target_lat NUMERIC(10, 6) DEFAULT -7.050500;
+    `);
+    await db.query(`
+      ALTER TABLE quiz_settings 
+      ADD COLUMN IF NOT EXISTS target_lng NUMERIC(10, 6) DEFAULT 110.443800;
+    `);
+    await db.query(`
+      ALTER TABLE quiz_settings 
+      ADD COLUMN IF NOT EXISTS target_radius_meters INT DEFAULT 450;
+    `);
+    await db.query(`
+      ALTER TABLE quiz_settings 
+      ADD COLUMN IF NOT EXISTS target_location_name VARCHAR(150) DEFAULT 'Fakultas Sains dan Matematika (FSM) Undip';
+    `);
+
+    // Kolom Rekam Lokasi Fisik & Jaringan Mahasiswa di quiz_submissions
+    await db.query(`
+      ALTER TABLE quiz_submissions 
+      ADD COLUMN IF NOT EXISTS location_lat NUMERIC(10, 6);
+    `);
+    await db.query(`
+      ALTER TABLE quiz_submissions 
+      ADD COLUMN IF NOT EXISTS location_lng NUMERIC(10, 6);
+    `);
+    await db.query(`
+      ALTER TABLE quiz_submissions 
+      ADD COLUMN IF NOT EXISTS location_distance_meters INT;
+    `);
+    await db.query(`
+      ALTER TABLE quiz_submissions 
+      ADD COLUMN IF NOT EXISTS location_accuracy_meters INT;
+    `);
+    await db.query(`
+      ALTER TABLE quiz_submissions 
+      ADD COLUMN IF NOT EXISTS location_status VARCHAR(50);
+    `);
+    await db.query(`
+      ALTER TABLE quiz_submissions 
+      ADD COLUMN IF NOT EXISTS client_ip VARCHAR(50);
+    `);
+
     // 4. Buat tabel master data mahasiswa peserta PPK
     await db.query(`
       CREATE TABLE IF NOT EXISTS quiz_students (
@@ -453,7 +533,12 @@ app.get('/v1/quiz/settings/:quizId', async (req, res) => {
     // 2. Kuis valid: Ambil pengaturan jadwal & durasi dari tabel quiz_settings
     const settingResult = await db.query(
       `SELECT quiz_id, start_time, end_time, duration_minutes, max_violations, is_active,
-              grading_rubric, auto_grade, gemini_api_key, gemini_model
+              grading_rubric, auto_grade, gemini_api_key, gemini_model,
+              COALESCE(require_location, TRUE) AS require_location,
+              COALESCE(target_lat, -7.050500) AS target_lat,
+              COALESCE(target_lng, 110.443800) AS target_lng,
+              COALESCE(target_radius_meters, 450) AS target_radius_meters,
+              COALESCE(target_location_name, 'Fakultas Sains dan Matematika (FSM) Undip') AS target_location_name
        FROM quiz_settings 
        WHERE quiz_id = $1`,
       [cleanQuizId]
@@ -468,6 +553,11 @@ app.get('/v1/quiz/settings/:quizId', async (req, res) => {
     let autoGrade = false;
     let geminiApiKey = '';
     let geminiModel = 'gemini-3.8-flash';
+    let requireLocation = true;
+    let targetLat = DEFAULT_FSM_LAT;
+    let targetLng = DEFAULT_FSM_LNG;
+    let targetRadiusMeters = DEFAULT_FSM_RADIUS;
+    let targetLocationName = DEFAULT_FSM_NAME;
 
     if (settingResult.rows.length > 0) {
       const row = settingResult.rows[0];
@@ -479,10 +569,12 @@ app.get('/v1/quiz/settings/:quizId', async (req, res) => {
       gradingRubric = row.grading_rubric || '';
       autoGrade = Boolean(row.auto_grade);
       geminiApiKey = row.gemini_api_key || '';
-      // geminiModel = row.gemini_model && row.gemini_model !== 'gemini-1.5-flash' ? row.gemini_model : 'gemini-2.5-flash';
-      // Ganti fallback default jika ada:
       geminiModel = row.gemini_model || 'gemini-3.8-flash';
-
+      requireLocation = row.require_location !== false;
+      targetLat = Number(row.target_lat) || DEFAULT_FSM_LAT;
+      targetLng = Number(row.target_lng) || DEFAULT_FSM_LNG;
+      targetRadiusMeters = Number(row.target_radius_meters) || DEFAULT_FSM_RADIUS;
+      targetLocationName = row.target_location_name || DEFAULT_FSM_NAME;
     }
 
     return res.json({
@@ -500,6 +592,11 @@ app.get('/v1/quiz/settings/:quizId', async (req, res) => {
         auto_grade: autoGrade,
         gemini_api_key: geminiApiKey,
         gemini_model: geminiModel,
+        require_location: requireLocation,
+        target_lat: targetLat,
+        target_lng: targetLng,
+        target_radius_meters: targetRadiusMeters,
+        target_location_name: targetLocationName,
         total_questions: totalQuestions
       }
     });
@@ -511,7 +608,11 @@ app.get('/v1/quiz/settings/:quizId', async (req, res) => {
 
 // Menyimpan/memperbarui pengaturan jadwal & timer (Hanya SUPERADMIN & DOSEN)
 app.post('/v1/admin/quiz/settings', authenticate, requireRole('SUPERADMIN', 'DOSEN'), async (req, res) => {
-  const { quizId, startTime, endTime, durationMinutes, maxViolations, isActive, gradingRubric, autoGrade, geminiApiKey, geminiModel } = req.body;
+  const {
+    quizId, startTime, endTime, durationMinutes, maxViolations, isActive,
+    gradingRubric, autoGrade, geminiApiKey, geminiModel,
+    requireLocation, targetLat, targetLng, targetRadiusMeters, targetLocationName
+  } = req.body;
 
   if (!quizId) {
     return res.status(400).json({ status: 'error', message: 'quizId wajib diisi!' });
@@ -528,11 +629,21 @@ app.post('/v1/admin/quiz/settings', authenticate, requireRole('SUPERADMIN', 'DOS
   const model = typeof geminiModel === 'string' && geminiModel.trim() && geminiModel.trim() !== 'gemini-1.5-flash'
     ? geminiModel.trim()
     : 'gemini-2.5-flash';
+  const reqLoc = requireLocation !== false;
+  const tLat = targetLat !== undefined && targetLat !== null ? Number(targetLat) : DEFAULT_FSM_LAT;
+  const tLng = targetLng !== undefined && targetLng !== null ? Number(targetLng) : DEFAULT_FSM_LNG;
+  const tRadius = targetRadiusMeters ? parseInt(targetRadiusMeters, 10) : DEFAULT_FSM_RADIUS;
+  const tLocName = typeof targetLocationName === 'string' && targetLocationName.trim() ? targetLocationName.trim() : DEFAULT_FSM_NAME;
 
   try {
     const result = await db.query(
-      `INSERT INTO quiz_settings (quiz_id, start_time, end_time, duration_minutes, max_violations, is_active, grading_rubric, auto_grade, gemini_api_key, gemini_model, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
+      `INSERT INTO quiz_settings (
+         quiz_id, start_time, end_time, duration_minutes, max_violations, is_active,
+         grading_rubric, auto_grade, gemini_api_key, gemini_model,
+         require_location, target_lat, target_lng, target_radius_meters, target_location_name,
+         updated_at
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW())
        ON CONFLICT (quiz_id) 
        DO UPDATE SET 
          start_time = EXCLUDED.start_time,
@@ -544,9 +655,14 @@ app.post('/v1/admin/quiz/settings', authenticate, requireRole('SUPERADMIN', 'DOS
          auto_grade = EXCLUDED.auto_grade,
          gemini_api_key = EXCLUDED.gemini_api_key,
          gemini_model = EXCLUDED.gemini_model,
+         require_location = EXCLUDED.require_location,
+         target_lat = EXCLUDED.target_lat,
+         target_lng = EXCLUDED.target_lng,
+         target_radius_meters = EXCLUDED.target_radius_meters,
+         target_location_name = EXCLUDED.target_location_name,
          updated_at = NOW()
        RETURNING *`,
-      [quizId.trim(), start, end, duration, maxV, active, rubric, isAuto, key, model]
+      [quizId.trim(), start, end, duration, maxV, active, rubric, isAuto, key, model, reqLoc, tLat, tLng, tRadius, tLocName]
     );
     res.json({
       status: 'success',
@@ -759,8 +875,13 @@ app.get('/v1/quiz/check-student', async (req, res) => {
 
 // Menyimpan jawaban kuis peserta (disertai verifikasi integritas & server-enforced proctoring)
 app.post('/v1/quiz/submit', async (req, res) => {
-  const { userId, nim, quizId, answers, status, violationCount, questionTimings, activityLog, durationSeconds, attempt, kelas } = req.body;
+  const {
+    userId, nim, quizId, answers, status, violationCount,
+    questionTimings, activityLog, durationSeconds, attempt, kelas,
+    locationLat, locationLng, locationAccuracy, locationDistance, locationStatus
+  } = req.body;
 
+  const clientIp = (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket.remoteAddress || '-';
   const cleanNim = String(nim || '').trim();
   const cleanQuizId = String(quizId || '').trim();
 
@@ -775,7 +896,13 @@ app.post('/v1/quiz/submit', async (req, res) => {
     // 1. Validasi keabsahan mahasiswa & kuis dari database
     const [stuRes, setRes] = await Promise.all([
       db.query('SELECT nim, nama, kelas FROM quiz_students WHERE nim = $1', [cleanNim]),
-      db.query('SELECT quiz_id, max_violations, duration_minutes, auto_grade FROM quiz_settings WHERE quiz_id = $1', [cleanQuizId])
+      db.query(`SELECT quiz_id, max_violations, duration_minutes, auto_grade,
+                       COALESCE(require_location, TRUE) AS require_location,
+                       COALESCE(target_lat, -7.050500) AS target_lat,
+                       COALESCE(target_lng, 110.443800) AS target_lng,
+                       COALESCE(target_radius_meters, 450) AS target_radius_meters
+                FROM quiz_settings 
+                WHERE quiz_id = $1`, [cleanQuizId])
     ]);
 
     if (stuRes.rows.length === 0) {
@@ -788,6 +915,21 @@ app.post('/v1/quiz/submit', async (req, res) => {
     const studentRecord = stuRes.rows[0];
     const settingsRecord = setRes.rows[0];
     const studentKelas = kelas || studentRecord.kelas || '-';
+
+    // Verifikasi jarak lokasi server-side ke target FSM Undip
+    let verifiedDistance = locationDistance !== undefined && locationDistance !== null ? parseInt(locationDistance, 10) : null;
+    let finalLocationStatus = locationStatus || 'NOT_RECORDED';
+
+    if (locationLat !== undefined && locationLng !== undefined && locationLat !== null && locationLng !== null) {
+      const targetLat = Number(settingsRecord.target_lat) || DEFAULT_FSM_LAT;
+      const targetLng = Number(settingsRecord.target_lng) || DEFAULT_FSM_LNG;
+      const targetRadius = Number(settingsRecord.target_radius_meters) || DEFAULT_FSM_RADIUS;
+      const calcDist = getHaversineDistance(locationLat, locationLng, targetLat, targetLng);
+      if (calcDist !== null) {
+        verifiedDistance = calcDist;
+        finalLocationStatus = calcDist <= targetRadius ? 'VALID_CAMPUS' : 'OUTSIDE_CAMPUS';
+      }
+    }
 
     // 2. Otoritatif: Ambil batas pelanggaran dari database, BUKAN dari req.body client
     const serverMaxViolations = Number(settingsRecord.max_violations) || 3;
@@ -820,18 +962,32 @@ app.post('/v1/quiz/submit', async (req, res) => {
     let insertedId = null;
     try {
       const insRes = await db.query(
-        `INSERT INTO quiz_submissions (user_id, nim, quiz_id, answers, status, violation_count, max_violations, question_timings, activity_log, duration_seconds, attempt, kelas, submitted_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())
+        `INSERT INTO quiz_submissions (
+           user_id, nim, quiz_id, answers, status, violation_count, max_violations,
+           question_timings, activity_log, duration_seconds, attempt, kelas,
+           location_lat, location_lng, location_distance_meters, location_accuracy_meters, location_status, client_ip,
+           submitted_at
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, NOW())
          RETURNING id`,
-        [userId, cleanNim, cleanQuizId, JSON.stringify(answers || {}), finalStatus, finalViolationCount, serverMaxViolations, qTimingsJson, actLogJson, durSec, attemptNum, studentKelas]
+        [
+          userId, cleanNim, cleanQuizId, JSON.stringify(answers || {}), finalStatus,
+          finalViolationCount, serverMaxViolations, qTimingsJson, actLogJson, durSec, attemptNum, studentKelas,
+          locationLat ? Number(locationLat) : null,
+          locationLng ? Number(locationLng) : null,
+          verifiedDistance,
+          locationAccuracy ? Math.round(Number(locationAccuracy)) : null,
+          finalLocationStatus,
+          clientIp
+        ]
       );
       insertedId = insRes.rows[0]?.id;
     } catch (insertColErr) {
       const insRes = await db.query(
-        `INSERT INTO quiz_submissions (user_id, nim, quiz_id, answers, status, violation_count, max_violations, submitted_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+        `INSERT INTO quiz_submissions (user_id, nim, quiz_id, answers, status, violation_count, max_violations, question_timings, activity_log, duration_seconds, attempt, kelas, submitted_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())
          RETURNING id`,
-        [userId, cleanNim, cleanQuizId, JSON.stringify(answers || {}), finalStatus, finalViolationCount, serverMaxViolations]
+        [userId, cleanNim, cleanQuizId, JSON.stringify(answers || {}), finalStatus, finalViolationCount, serverMaxViolations, qTimingsJson, actLogJson, durSec, attemptNum, studentKelas]
       );
       insertedId = insRes.rows[0]?.id;
     }
@@ -963,6 +1119,9 @@ app.post('/v1/quiz/live/session', async (req, res) => {
 
     const studentKelas = kelas || studentRecord.kelas || '-';
     const safeQTexts = Array.isArray(questionTexts) ? questionTexts.slice(0, 50) : [];
+    const clientIp = (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket.remoteAddress || '-';
+
+    const { locationLat, locationLng, locationAccuracy, locationDistance, locationStatus } = req.body;
 
     liveStudentSessions.set(key, {
       key,
@@ -983,7 +1142,13 @@ app.post('/v1/quiz/live/session', async (req, res) => {
       lastHeartbeat: now,
       lastHeartbeatISO: new Date(now).toISOString(),
       violationCount: 0,
-      remainingSeconds: null
+      remainingSeconds: null,
+      locationLat: locationLat !== undefined ? locationLat : null,
+      locationLng: locationLng !== undefined ? locationLng : null,
+      locationAccuracy: locationAccuracy !== undefined ? locationAccuracy : null,
+      locationDistance: locationDistance !== undefined ? locationDistance : null,
+      locationStatus: locationStatus || 'NOT_RECORDED',
+      clientIp
     });
 
     const token = generateExamToken(cleanNim, cleanQuizId);
@@ -1002,7 +1167,8 @@ app.post('/v1/quiz/live/heartbeat', (req, res) => {
     remainingSeconds, violationCount,
     status,
     userId, totalQuestions, questionTexts,
-    examToken
+    examToken,
+    locationLat, locationLng, locationAccuracy, locationDistance, locationStatus
   } = req.body;
 
   if (!nim || !quizId) {
@@ -1020,6 +1186,7 @@ app.post('/v1/quiz/live/heartbeat', (req, res) => {
   const key = getLiveSessionKey(cleanNim, cleanQuizId);
   const now = Date.now();
   let existing = liveStudentSessions.get(key);
+  const clientIp = (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket.remoteAddress || '-';
 
   if (!existing) {
     enforceLiveSessionsLimit();
@@ -1041,7 +1208,13 @@ app.post('/v1/quiz/live/heartbeat', (req, res) => {
       lastHeartbeat: now,
       lastHeartbeatISO: new Date(now).toISOString(),
       violationCount: 0,
-      remainingSeconds: null
+      remainingSeconds: null,
+      locationLat: locationLat !== undefined ? locationLat : null,
+      locationLng: locationLng !== undefined ? locationLng : null,
+      locationAccuracy: locationAccuracy !== undefined ? locationAccuracy : null,
+      locationDistance: locationDistance !== undefined ? locationDistance : null,
+      locationStatus: locationStatus || 'NOT_RECORDED',
+      clientIp
     };
   }
 
@@ -1054,6 +1227,13 @@ app.post('/v1/quiz/live/heartbeat', (req, res) => {
   existing.violationCount = violationCount !== undefined ? violationCount : existing.violationCount;
   existing.lastHeartbeat = now;
   existing.lastHeartbeatISO = new Date(now).toISOString();
+
+  if (locationLat !== undefined) existing.locationLat = locationLat;
+  if (locationLng !== undefined) existing.locationLng = locationLng;
+  if (locationAccuracy !== undefined) existing.locationAccuracy = locationAccuracy;
+  if (locationDistance !== undefined) existing.locationDistance = locationDistance;
+  if (locationStatus) existing.locationStatus = locationStatus;
+  existing.clientIp = clientIp;
 
   // Update status (ACTIVE, SUBMITTED, DISQUALIFIED, TIME_EXPIRED)
   if (status && status !== 'ACTIVE') {
@@ -1671,7 +1851,13 @@ app.get('/v1/admin/submissions', authenticate, async (req, res) => {
         stu.prodi,
         GREATEST(COALESCE(s.violation_count, 0), COALESCE(v.total_violations, 0)) AS violation_count,
         COALESCE(s.max_violations, 3) AS max_violations,
-        COALESCE(v.violation_breakdown, '-') AS violation_summary
+        COALESCE(v.violation_breakdown, '-') AS violation_summary,
+        s.location_lat,
+        s.location_lng,
+        s.location_distance_meters,
+        s.location_accuracy_meters,
+        s.location_status,
+        s.client_ip
       FROM quiz_submissions s
       LEFT JOIN quiz_students stu ON stu.nim = s.nim
       LEFT JOIN (
