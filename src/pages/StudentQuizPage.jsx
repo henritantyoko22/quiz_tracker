@@ -346,130 +346,141 @@ export function StudentQuizPage() {
     const targetRadius = Number(settings.target_radius_meters) || 450;
     const locName = settings.target_location_name || 'Fakultas Sains dan Matematika (FSM) Undip';
 
-    navigator.geolocation.getCurrentPosition(
-      async (pos) => {
-        const lat = pos.coords.latitude;
-        const lng = pos.coords.longitude;
-        const rawAccuracy = Number(pos.coords.accuracy || 0);
-        const accuracy = Math.round(rawAccuracy);
-        const distance = calculateHaversine(lat, lng, targetLat, targetLng);
+    const runGeolocation = (highAccuracy = true) => {
+      navigator.geolocation.getCurrentPosition(
+        async (pos) => {
+          const lat = pos.coords.latitude;
+          const lng = pos.coords.longitude;
+          const rawAccuracy = Number(pos.coords.accuracy || 0);
+          const accuracy = Math.round(rawAccuracy);
+          const distance = calculateHaversine(lat, lng, targetLat, targetLng);
 
-        // 1. Deteksi Sinyal Mock Location dari Geolocation Coordinates (Chrome / Android)
-        const isMockFlag = Boolean(pos.coords.isMock || pos.mocked || pos.coords.mocked);
+          // 1. Deteksi Sinyal Mock Location dari Geolocation Coordinates (Chrome / Android)
+          const isMockFlag = Boolean(pos.coords.isMock || pos.mocked || pos.coords.mocked);
 
-        // 2. Deteksi Anomali Akurasi khas software Fake GPS (akurasi 0m atau < 0.5m mustahil untuk GPS satelit HP)
-        const isSuspiciousAccuracy = rawAccuracy === 0 || (rawAccuracy > 0 && rawAccuracy < 0.5);
+          // 2. Deteksi Anomali Akurasi khas software Fake GPS (akurasi 0m atau < 0.5m mustahil untuk GPS satelit HP)
+          const isSuspiciousAccuracy = rawAccuracy === 0 || (rawAccuracy > 0 && rawAccuracy < 0.5);
 
-        // 3. Validasi Silang Jaringan IP (Cross-check IP Geolocation via server)
-        let isIpMismatch = false;
-        let netTelemetry = null;
-        let ipVsGpsDist = null;
-        try {
-          const tRes = await fetch(`${API_BASE}/v1/quiz/network-telemetry`);
-          if (tRes.ok) {
-            netTelemetry = await tRes.json();
-            if (netTelemetry && netTelemetry.ipLat && netTelemetry.ipLng) {
-              ipVsGpsDist = calculateHaversine(lat, lng, netTelemetry.ipLat, netTelemetry.ipLng);
-              // Jika GPS mengaku di FSM Undip namun IP ISP berada > 85 km (misal Jakarta, Surabaya, Bandung, Solo)
-              if (ipVsGpsDist > 85000) {
-                isIpMismatch = true;
+          // 3. Validasi Silang Jaringan IP (Cross-check IP Geolocation via server)
+          let isIpMismatch = false;
+          let netTelemetry = null;
+          let ipVsGpsDist = null;
+          try {
+            const tRes = await fetch(`${API_BASE}/v1/quiz/network-telemetry`);
+            if (tRes.ok) {
+              netTelemetry = await tRes.json();
+              if (netTelemetry && netTelemetry.ipLat && netTelemetry.ipLng) {
+                ipVsGpsDist = calculateHaversine(lat, lng, netTelemetry.ipLat, netTelemetry.ipLng);
+                // Jika GPS mengaku di FSM Undip namun IP ISP berada > 85 km (misal Jakarta, Surabaya, Bandung, Solo)
+                if (ipVsGpsDist > 85000) {
+                  isIpMismatch = true;
+                }
               }
             }
+          } catch (_) {}
+
+          // Evaluasi apakah terdeteksi Fake GPS
+          if (isMockFlag || isSuspiciousAccuracy || isIpMismatch) {
+            const fakeReason = isMockFlag
+              ? 'Terdeteksi sinyal Mock Location / Fake GPS aktif pada perangkat Anda.'
+              : isIpMismatch
+              ? `Ketidakcocokan Jaringan: GPS mengaku di FSM Undip, namun IP jaringan internet Anda terdeteksi di area ${netTelemetry?.ipCity || 'luar Semarang'} (~${Math.round(ipVsGpsDist / 1000)} km dari kampus).`
+              : 'Terdeteksi anomali akurasi GPS (±0m) khas aplikasi pemalsu lokasi.';
+
+            const locObj = {
+              checking: false,
+              verified: false,
+              lat,
+              lng,
+              accuracy,
+              distance,
+              isMock: true,
+              status: 'FAKE_GPS_DETECTED',
+              message: `🚨 PENGGUNAAN FAKE GPS TERDETEKSI: ${fakeReason} Anda WAJIB mematikan aplikasi Fake GPS dan Developer Options, lalu verifikasi ulang secara fisik di lingkungan FSM Undip.`,
+            };
+            setLocationState(locObj);
+            locationRef.current = { lat, lng, accuracy, distance, isMock: true, status: 'FAKE_GPS_DETECTED' };
+            addToast('🚨 PENGGUNAAN FAKE GPS TERDETEKSI! Akses ujian diblokir.', 'danger');
+            return;
           }
-        } catch (_) {}
 
-        // Evaluasi apakah terdeteksi Fake GPS
-        if (isMockFlag || isSuspiciousAccuracy || isIpMismatch) {
-          const fakeReason = isMockFlag
-            ? 'Terdeteksi sinyal Mock Location / Fake GPS aktif pada perangkat Anda.'
-            : isIpMismatch
-            ? `Ketidakcocokan Jaringan: GPS mengaku di FSM Undip, namun IP jaringan internet Anda terdeteksi di area ${netTelemetry?.ipCity || 'luar Semarang'} (~${Math.round(ipVsGpsDist / 1000)} km dari kampus).`
-            : 'Terdeteksi anomali akurasi GPS (±0m) khas aplikasi pemalsu lokasi.';
+          if (distance <= targetRadius) {
+            const locObj = {
+              checking: false,
+              verified: true,
+              lat,
+              lng,
+              accuracy,
+              distance,
+              isMock: false,
+              status: 'VALID_CAMPUS',
+              message: `Lokasi Terverifikasi: Anda berada di area ${locName} (Jarak ~${distance} meter, akurasi GPS ±${accuracy}m).`,
+            };
+            setLocationState(locObj);
+            locationRef.current = { lat, lng, accuracy, distance, isMock: false, status: 'VALID_CAMPUS' };
+            addToast(`✅ Lokasi terverifikasi di area FSM Undip (~${distance}m).`, 'success');
+          } else {
+            const distLabel = distance >= 1000 ? `${(distance / 1000).toFixed(2)} km` : `${distance} meter`;
+            const locObj = {
+              checking: false,
+              verified: false,
+              lat,
+              lng,
+              accuracy,
+              distance,
+              isMock: false,
+              status: 'OUTSIDE_CAMPUS',
+              message: `Akses Ditolak: Anda terdeteksi berada di luar area ${locName} (Jarak terdeteksi: ~${distLabel}). Ujian ini WAJIB dikerjakan langsung di lingkungan FSM Undip (Radius toleransi maksimal ${targetRadius} meter).`,
+            };
+            setLocationState(locObj);
+            locationRef.current = { lat, lng, accuracy, distance, isMock: false, status: 'OUTSIDE_CAMPUS' };
+            addToast(`⛔ Anda berada di luar area FSM Undip (~${distLabel}).`, 'danger');
+          }
+        },
+        (err) => {
+          // Jika high accuracy gagal/timeout (umum terjadi di Safari iOS / Mac tanpa hardware GPS satelit),
+          // coba fallback dengan standard accuracy
+          if (highAccuracy && (err.code === 2 || err.code === 3)) {
+            runGeolocation(false);
+            return;
+          }
 
+          let msg = 'Gagal mendeteksi lokasi.';
+          let st = 'ERROR';
+          if (err.code === 1) {
+            st = 'PERMISSION_DENIED';
+            msg = `Izin lokasi ditolak oleh browser. Ujian ini WAJIB memverifikasi kehadiran fisik di area ${locName}. Petunjuk: Pada Chrome klik ikon 🔒 / setelan situs. Pada Safari (iOS/iPhone), buka Pengaturan > Privasi & Keamanan > Layanan Lokasi > Safari > pilih "Saat Menggunakan App", lalu klik Verifikasi Ulang.`;
+          } else if (err.code === 2) {
+            st = 'UNAVAILABLE';
+            msg = 'Informasi lokasi tidak tersedia. Pastikan fitur Lokasi / GPS pada perangkat aktif dan terhubung ke Wi-Fi / data seluler.';
+          } else if (err.code === 3) {
+            st = 'TIMEOUT';
+            msg = 'Waktu permintaan lokasi habis (timeout). Silakan periksa koneksi GPS / Wi-Fi dan klik Verifikasi Ulang.';
+          }
           const locObj = {
             checking: false,
             verified: false,
-            lat,
-            lng,
-            accuracy,
-            distance,
-            isMock: true,
-            status: 'FAKE_GPS_DETECTED',
-            message: `🚨 PENGGUNAAN FAKE GPS TERDETEKSI: ${fakeReason} Anda WAJIB mematikan aplikasi Fake GPS dan Developer Options, lalu verifikasi ulang secara fisik di lingkungan FSM Undip.`,
+            lat: null,
+            lng: null,
+            accuracy: null,
+            distance: null,
+            isMock: false,
+            status: st,
+            message: msg,
           };
           setLocationState(locObj);
-          locationRef.current = { lat, lng, accuracy, distance, isMock: true, status: 'FAKE_GPS_DETECTED' };
-          addToast('🚨 PENGGUNAAN FAKE GPS TERDETEKSI! Akses ujian diblokir.', 'danger');
-          return;
+          locationRef.current = { lat: null, lng: null, accuracy: null, distance: null, isMock: false, status: st };
+          addToast(msg, 'danger');
+        },
+        {
+          enableHighAccuracy: highAccuracy,
+          timeout: highAccuracy ? 15000 : 12000,
+          maximumAge: highAccuracy ? 0 : 30000,
         }
+      );
+    };
 
-        if (distance <= targetRadius) {
-          const locObj = {
-            checking: false,
-            verified: true,
-            lat,
-            lng,
-            accuracy,
-            distance,
-            isMock: false,
-            status: 'VALID_CAMPUS',
-            message: `Lokasi Terverifikasi: Anda berada di area ${locName} (Jarak ~${distance} meter, akurasi GPS ±${accuracy}m).`,
-          };
-          setLocationState(locObj);
-          locationRef.current = { lat, lng, accuracy, distance, isMock: false, status: 'VALID_CAMPUS' };
-          addToast(`✅ Lokasi terverifikasi di area FSM Undip (~${distance}m).`, 'success');
-        } else {
-          const distLabel = distance >= 1000 ? `${(distance / 1000).toFixed(2)} km` : `${distance} meter`;
-          const locObj = {
-            checking: false,
-            verified: false,
-            lat,
-            lng,
-            accuracy,
-            distance,
-            isMock: false,
-            status: 'OUTSIDE_CAMPUS',
-            message: `Akses Ditolak: Anda terdeteksi berada di luar area ${locName} (Jarak terdeteksi: ~${distLabel}). Ujian ini WAJIB dikerjakan langsung di lingkungan FSM Undip (Radius toleransi maksimal ${targetRadius} meter).`,
-          };
-          setLocationState(locObj);
-          locationRef.current = { lat, lng, accuracy, distance, isMock: false, status: 'OUTSIDE_CAMPUS' };
-          addToast(`⛔ Anda berada di luar area FSM Undip (~${distLabel}).`, 'danger');
-        }
-      },
-      (err) => {
-        let msg = 'Gagal mendeteksi lokasi.';
-        let st = 'ERROR';
-        if (err.code === 1) {
-          st = 'PERMISSION_DENIED';
-          msg = `Izin lokasi ditolak oleh browser. Ujian ini WAJIB memverifikasi kehadiran fisik di area ${locName}. Silakan klik ikon gembok 🔒 di address bar browser, ubah Location menjadi "Allow / Izinkan", lalu klik Verifikasi Ulang.`;
-        } else if (err.code === 2) {
-          st = 'UNAVAILABLE';
-          msg = 'Informasi lokasi tidak tersedia. Pastikan Location / GPS pada perangkat Anda aktif.';
-        } else if (err.code === 3) {
-          st = 'TIMEOUT';
-          msg = 'Waktu permintaan lokasi habis (timeout). Silakan klik Verifikasi Ulang.';
-        }
-        const locObj = {
-          checking: false,
-          verified: false,
-          lat: null,
-          lng: null,
-          accuracy: null,
-          distance: null,
-          isMock: false,
-          status: st,
-          message: msg,
-        };
-        setLocationState(locObj);
-        locationRef.current = { lat: null, lng: null, accuracy: null, distance: null, isMock: false, status: st };
-        addToast(msg, 'danger');
-      },
-      {
-        enableHighAccuracy: true,
-        timeout: 15000,
-        maximumAge: 0,
-      }
-    );
+    runGeolocation(true);
   }, [scheduleState.settings, addToast]);
 
   // Otomatis memicu deteksi lokasi saat NIM terverifikasi dan ID Quiz valid
