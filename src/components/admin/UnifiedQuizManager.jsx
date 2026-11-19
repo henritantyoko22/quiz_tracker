@@ -11,6 +11,7 @@ export function UnifiedQuizManager({ token, quizList, onRefreshQuizList, showToa
   const [isActive, setIsActive] = useState(true);
   const [startTime, setStartTime] = useState('');
   const [endTime, setEndTime] = useState('');
+  const [mataKuliah, setMataKuliah] = useState('PPK');
   const [requireLocation, setRequireLocation] = useState(true);
   const [targetRadiusMeters, setTargetRadiusMeters] = useState(450);
 
@@ -99,6 +100,7 @@ export function UnifiedQuizManager({ token, quizList, onRefreshQuizList, showToa
           setIsActive(s.is_active !== false);
           setStartTime(toLocalISOString(s.start_time));
           setEndTime(toLocalISOString(s.end_time));
+          setMataKuliah(s.mata_kuliah || 'PPK');
           setGradingRubric(s.grading_rubric || '');
           setAutoGrade(Boolean(s.auto_grade));
           setGeminiApiKey(s.gemini_api_key || '');
@@ -115,6 +117,7 @@ export function UnifiedQuizManager({ token, quizList, onRefreshQuizList, showToa
           setIsActive(true);
           setStartTime('');
           setEndTime('');
+          setMataKuliah('PPK');
           setGradingRubric('');
           setAutoGrade(false);
           setRequireLocation(true);
@@ -243,6 +246,7 @@ export function UnifiedQuizManager({ token, quizList, onRefreshQuizList, showToa
         headers: getAuthHeaders(token),
         body: JSON.stringify({
           quizId: selectedQuizId,
+          mataKuliah: mataKuliah || 'PPK',
           durationMinutes: Number(durationMinutes) || 30,
           maxViolations: Number(maxViolations) || 3,
           isActive: Boolean(isActive),
@@ -416,6 +420,22 @@ export function UnifiedQuizManager({ token, quizList, onRefreshQuizList, showToa
                 Status Ujian Dibuka (Aktif)
               </label>
             </div>
+            <div style={{ marginBottom: 14 }}>
+              <label style={{ fontSize: '0.8rem', fontWeight: 800, color: '#334155', display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                <span>📚</span> Mata Kuliah Kuis Ini:
+              </label>
+              <select
+                className="filter-select"
+                style={{ width: '100%', maxWidth: 380, padding: '8px 12px', fontSize: '0.86rem', fontWeight: 700 }}
+                value={mataKuliah}
+                onChange={(e) => setMataKuliah(e.target.value)}
+              >
+                <option value="PPK">⚙️ Pengembangan Perangkat Keras (PPK)</option>
+                <option value="IoT">📡 Internet of Things (IoT)</option>
+                <option value="Algoritma Evolusioner">🧬 Algoritma Evolusioner</option>
+              </select>
+            </div>
+
             <div className="form-grid-4">
               <div className="field-group">
                 <label>Durasi Ujian (Menit)</label>

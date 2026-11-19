@@ -281,7 +281,7 @@ export function StudentQuizPage() {
             warningMessage: null,
             error:
               (data && data.message) ||
-              'NIM tidak terdaftar sebagai peserta mata kuliah PPK.',
+              'NIM tidak terdaftar sebagai peserta mata kuliah.',
           });
           setStudentName('');
         }

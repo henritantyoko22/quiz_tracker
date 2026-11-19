@@ -478,7 +478,17 @@ async function initDbTables() {
       ADD COLUMN IF NOT EXISTS client_ip VARCHAR(50);
     `);
 
-    // 4. Buat tabel master data mahasiswa peserta PPK
+    // Kolom Mata Kuliah pada quiz_settings dan quiz_students
+    await db.query(`
+      ALTER TABLE quiz_settings 
+      ADD COLUMN IF NOT EXISTS mata_kuliah VARCHAR(100) DEFAULT 'PPK';
+    `);
+    await db.query(`
+      ALTER TABLE quiz_students 
+      ADD COLUMN IF NOT EXISTS mata_kuliah VARCHAR(100) DEFAULT 'PPK';
+    `);
+
+    // 4. Buat tabel master data mahasiswa & enrollment kelas mata kuliah
     await db.query(`
       CREATE TABLE IF NOT EXISTS quiz_students (
         nim VARCHAR(30) PRIMARY KEY,
@@ -487,39 +497,66 @@ async function initDbTables() {
         prodi VARCHAR(100) DEFAULT 'Informatika S1',
         status VARCHAR(30) DEFAULT 'BARU',
         semester INT DEFAULT 5,
+        mata_kuliah VARCHAR(100) DEFAULT 'PPK',
         created_at TIMESTAMPTZ DEFAULT NOW(),
         updated_at TIMESTAMPTZ DEFAULT NOW()
       );
     `);
 
-    // 5. Auto-sync data mahasiswa (PPK & Algoritma Evolusioner)
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS quiz_student_enrollments (
+        nim VARCHAR(30) NOT NULL,
+        mata_kuliah VARCHAR(100) NOT NULL,
+        kelas VARCHAR(10) NOT NULL,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        PRIMARY KEY (nim, mata_kuliah)
+      );
+    `);
+
+    // 5. Auto-sync data mahasiswa (PPK, Algoritma Evolusioner, & Internet of Things / IoT)
     try {
       const allStudentLists = [];
       try {
         const studentsPpk = require('./src/data/students_ppk.json');
-        if (Array.isArray(studentsPpk)) allStudentLists.push(...studentsPpk);
+        if (Array.isArray(studentsPpk)) {
+          allStudentLists.push(...studentsPpk.map(s => ({ ...s, course: 'PPK' })));
+        }
       } catch (_) {}
       try {
         const studentsAlgo = require('./src/data/students_algo_evolusioner.json');
-        if (Array.isArray(studentsAlgo)) allStudentLists.push(...studentsAlgo);
+        if (Array.isArray(studentsAlgo)) {
+          allStudentLists.push(...studentsAlgo.map(s => ({ ...s, course: 'Algoritma Evolusioner' })));
+        }
+      } catch (_) {}
+      try {
+        const studentsIot = require('./src/data/students_iot.json');
+        if (Array.isArray(studentsIot)) {
+          allStudentLists.push(...studentsIot.map(s => ({ ...s, course: 'IoT' })));
+        }
       } catch (_) {}
 
       if (allStudentLists.length > 0) {
         for (const s of allStudentLists) {
           await db.query(
-            `INSERT INTO quiz_students (nim, nama, kelas, prodi, status, semester)
-             VALUES ($1, $2, $3, $4, $5, $6)
+            `INSERT INTO quiz_students (nim, nama, kelas, prodi, status, semester, mata_kuliah)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)
              ON CONFLICT (nim) DO UPDATE SET
                nama = EXCLUDED.nama,
-               kelas = EXCLUDED.kelas,
                prodi = EXCLUDED.prodi,
                status = EXCLUDED.status,
                semester = EXCLUDED.semester,
                updated_at = NOW()`,
-            [s.nim, s.nama, s.kelas, s.prodi, s.status, s.semester]
+            [s.nim, s.nama, s.kelas, s.prodi, s.status, s.semester, s.course]
+          );
+          await db.query(
+            `INSERT INTO quiz_student_enrollments (nim, mata_kuliah, kelas)
+             VALUES ($1, $2, $3)
+             ON CONFLICT (nim, mata_kuliah) DO UPDATE SET
+               kelas = EXCLUDED.kelas`,
+            [s.nim, s.course, s.kelas]
           );
         }
-        console.log(`✅ Berhasil menyelaraskan ${allStudentLists.length} data peserta kuliah ke database.`);
+        console.log(`✅ Berhasil menyelaraskan ${allStudentLists.length} data peserta kuliah (PPK, Algo, IoT) ke database.`);
       }
     } catch (seedErr) {
       console.warn('ℹ️ Seed mahasiswa DB:', seedErr.message);
@@ -548,7 +585,8 @@ app.get('/v1/quiz/list', async (req, res) => {
          COALESCE(s.is_active, TRUE) AS is_active,
          s.start_time,
          s.end_time,
-         s.updated_at
+         s.updated_at,
+         COALESCE(s.mata_kuliah, 'PPK') AS mata_kuliah
        FROM (
          SELECT quiz_id, COUNT(*) AS total_questions
          FROM quiz_questions
@@ -630,6 +668,7 @@ app.get('/v1/quiz/settings/:quizId', async (req, res) => {
     let targetLng = DEFAULT_FSM_LNG;
     let targetRadiusMeters = DEFAULT_FSM_RADIUS;
     let targetLocationName = DEFAULT_FSM_NAME;
+    let mataKuliah = 'PPK';
 
     if (settingResult.rows.length > 0) {
       const row = settingResult.rows[0];
@@ -647,6 +686,7 @@ app.get('/v1/quiz/settings/:quizId', async (req, res) => {
       targetLng = Number(row.target_lng) || DEFAULT_FSM_LNG;
       targetRadiusMeters = Number(row.target_radius_meters) || DEFAULT_FSM_RADIUS;
       targetLocationName = row.target_location_name || DEFAULT_FSM_NAME;
+      mataKuliah = row.mata_kuliah || 'PPK';
     }
 
     return res.json({
@@ -669,6 +709,7 @@ app.get('/v1/quiz/settings/:quizId', async (req, res) => {
         target_lng: targetLng,
         target_radius_meters: targetRadiusMeters,
         target_location_name: targetLocationName,
+        mata_kuliah: mataKuliah,
         total_questions: totalQuestions
       }
     });
@@ -683,12 +724,19 @@ app.post('/v1/admin/quiz/settings', authenticate, requireRole('SUPERADMIN', 'DOS
   const {
     quizId, startTime, endTime, durationMinutes, maxViolations, isActive,
     gradingRubric, autoGrade, geminiApiKey, geminiModel,
-    requireLocation, targetLat, targetLng, targetRadiusMeters, targetLocationName
+    requireLocation, targetLat, targetLng, targetRadiusMeters, targetLocationName,
+    mataKuliah, mata_kuliah
   } = req.body;
 
   if (!quizId) {
     return res.status(400).json({ status: 'error', message: 'quizId wajib diisi!' });
   }
+
+  const courseName = typeof mataKuliah === 'string' && mataKuliah.trim()
+    ? mataKuliah.trim()
+    : typeof mata_kuliah === 'string' && mata_kuliah.trim()
+    ? mata_kuliah.trim()
+    : 'PPK';
 
   const duration = parseInt(durationMinutes) || 60;
   const maxV = parseInt(maxViolations) || 3;
@@ -713,9 +761,10 @@ app.post('/v1/admin/quiz/settings', authenticate, requireRole('SUPERADMIN', 'DOS
          quiz_id, start_time, end_time, duration_minutes, max_violations, is_active,
          grading_rubric, auto_grade, gemini_api_key, gemini_model,
          require_location, target_lat, target_lng, target_radius_meters, target_location_name,
+         mata_kuliah,
          updated_at
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW())
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NOW())
        ON CONFLICT (quiz_id) 
        DO UPDATE SET 
          start_time = EXCLUDED.start_time,
@@ -732,9 +781,10 @@ app.post('/v1/admin/quiz/settings', authenticate, requireRole('SUPERADMIN', 'DOS
          target_lng = EXCLUDED.target_lng,
          target_radius_meters = EXCLUDED.target_radius_meters,
          target_location_name = EXCLUDED.target_location_name,
+         mata_kuliah = EXCLUDED.mata_kuliah,
          updated_at = NOW()
        RETURNING *`,
-      [quizId.trim(), start, end, duration, maxV, active, rubric, isAuto, key, model, reqLoc, tLat, tLng, tRadius, tLocName]
+      [quizId.trim(), start, end, duration, maxV, active, rubric, isAuto, key, model, reqLoc, tLat, tLng, tRadius, tLocName, courseName]
     );
     res.json({
       status: 'success',
@@ -840,6 +890,12 @@ app.get('/v1/quiz/check-student', async (req, res) => {
           student = studentsAlgo.find(s => s.nim === cleanNim);
         } catch (_) {}
       }
+      if (!student) {
+        try {
+          const studentsIot = require('./src/data/students_iot.json');
+          student = studentsIot.find(s => s.nim === cleanNim);
+        } catch (_) {}
+      }
     }
 
     if (!student) {
@@ -848,6 +904,22 @@ app.get('/v1/quiz/check-student', async (req, res) => {
         registered: false,
         message: 'NIM tidak terdaftar sebagai peserta mata kuliah.'
       });
+    }
+
+    // Periksa enrollment kelas spesifik sesuai mata kuliah kuis (misal IoT vs PPK)
+    if (cleanQuizId) {
+      try {
+        const enrolRes = await db.query(
+          `SELECT e.kelas, e.mata_kuliah 
+           FROM quiz_student_enrollments e
+           JOIN quiz_settings qs ON (qs.mata_kuliah ILIKE e.mata_kuliah OR e.mata_kuliah ILIKE qs.mata_kuliah)
+           WHERE e.nim = $1 AND qs.quiz_id = $2`,
+          [cleanNim, cleanQuizId]
+        );
+        if (enrolRes.rows.length > 0) {
+          student.kelas = enrolRes.rows[0].kelas;
+        }
+      } catch (_) {}
     }
 
     const safeStudent = {
@@ -1196,7 +1268,7 @@ app.post('/v1/quiz/live/session', async (req, res) => {
     // Validasi bahwa mahasiswa dan kuis benar-benar ada di DB untuk mencegah pembanjiran data fiktif
     const [stuRes, setRes] = await Promise.all([
       db.query('SELECT nim, nama, kelas FROM quiz_students WHERE nim = $1', [cleanNim]),
-      db.query('SELECT quiz_id FROM quiz_settings WHERE quiz_id = $1', [cleanQuizId])
+      db.query('SELECT quiz_id, mata_kuliah FROM quiz_settings WHERE quiz_id = $1', [cleanQuizId])
     ]);
 
     if (stuRes.rows.length === 0) {
@@ -1245,12 +1317,14 @@ app.post('/v1/quiz/live/session', async (req, res) => {
     });
 
     const initialLocationStatus = antiSpoof.isFake ? 'FAKE_GPS_SPOOF' : (locationStatus || 'NOT_RECORDED');
+    const liveCourse = setRes.rows[0]?.mata_kuliah || (iotNimsSet.has(cleanNim) ? 'IoT' : 'PPK');
 
     liveStudentSessions.set(key, {
       key,
       nama: studentRecord.nama || userId || cleanNim,
       nim: cleanNim,
       quizId: cleanQuizId,
+      mataKuliah: liveCourse,
       kelas: studentKelas,
       attempt: Number(attempt) || 1,
       totalQuestions: totalQuestions || safeQTexts.length || 0,
@@ -1968,6 +2042,16 @@ app.delete('/v1/admin/users/:id', authenticate, requireRole('SUPERADMIN'), async
 // 3. ENDPOINT REKAPITULASI, PENILAIAN & IMPOR SOAL
 // -------------------------------------------------------------
 
+// Set cache NIM untuk deteksi mata kuliah otomatis
+let iotNimsSet = new Set();
+let algoNimsSet = new Set();
+try {
+  iotNimsSet = new Set(require('./src/data/students_iot.json').map(s => s.nim));
+} catch (_) {}
+try {
+  algoNimsSet = new Set(require('./src/data/students_algo_evolusioner.json').map(s => s.nim));
+} catch (_) {}
+
 // Rekap jawaban mahasiswa lengkap dengan laporan pelanggaran
 app.get('/v1/admin/submissions', authenticate, async (req, res) => {
   try {
@@ -1988,6 +2072,7 @@ app.get('/v1/admin/submissions', authenticate, async (req, res) => {
         COALESCE(s.attempt, 1) AS attempt,
         COALESCE(s.kelas, stu.kelas, '-') AS kelas,
         stu.prodi,
+        COALESCE(qs.mata_kuliah, stu.mata_kuliah, 'PPK') AS mata_kuliah,
         GREATEST(COALESCE(s.violation_count, 0), COALESCE(v.total_violations, 0)) AS violation_count,
         COALESCE(s.max_violations, 3) AS max_violations,
         COALESCE(v.violation_breakdown, '-') AS violation_summary,
@@ -1998,6 +2083,7 @@ app.get('/v1/admin/submissions', authenticate, async (req, res) => {
         s.location_status,
         s.client_ip
       FROM quiz_submissions s
+      LEFT JOIN quiz_settings qs ON qs.quiz_id = s.quiz_id
       LEFT JOIN quiz_students stu ON stu.nim = s.nim
       LEFT JOIN (
         SELECT 
@@ -2021,8 +2107,18 @@ app.get('/v1/admin/submissions', authenticate, async (req, res) => {
       if (typeof actLog === 'string') {
         try { actLog = JSON.parse(actLog); } catch (_) { actLog = []; }
       }
+
+      let mk = r.mata_kuliah || 'PPK';
+      const cleanQuiz = String(r.quiz_id || '').toUpperCase();
+      if (cleanQuiz.includes('IOT') || iotNimsSet.has(r.nim)) {
+        mk = 'IoT';
+      } else if (cleanQuiz.includes('ALGO') || algoNimsSet.has(r.nim)) {
+        mk = 'Algoritma Evolusioner';
+      }
+
       return {
         ...r,
+        mata_kuliah: mk,
         question_timings: Array.isArray(qTimings) ? qTimings : [],
         activity_log: Array.isArray(actLog) ? actLog : []
       };

@@ -36,6 +36,7 @@ export function AdminDashboardPage() {
   const [loadingData, setLoadingData] = useState(false);
 
   // Filters & Sorting State
+  const [courseFilter, setCourseFilter] = useState('ALL'); // 'ALL' | 'PPK' | 'IOT' | 'ALGO'
   const [searchQuery, setSearchQuery] = useState('');
   const [quizFilter, setQuizFilter] = useState('ALL');
   const [classFilter, setClassFilter] = useState('ALL');
@@ -43,6 +44,10 @@ export function AdminDashboardPage() {
   const [violationFilter, setViolationFilter] = useState('ALL');
   const [sortKey, setSortKey] = useState('submitted_at-desc');
   const [autoGradeLoading, setAutoGradeLoading] = useState(false);
+
+  // Pagination State for Submissions Table (Mencegah Lag / Lemot saat Ratusan Mahasiswa)
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25); // 15, 25, 50, 100, ALL
 
   // Modals & Toasts
   const [answerModal, setAnswerModal] = useState(null);
@@ -211,10 +216,44 @@ export function AdminDashboardPage() {
     [token, showToast]
   );
 
-  // Memoized Filtered Submissions
+  // Hitung jumlah data per mata kuliah
+  const courseCounts = useMemo(() => {
+    let ppk = 0;
+    let iot = 0;
+    let algo = 0;
+    submissions.forEach((s) => {
+      const mk = String(s.mata_kuliah || '').toUpperCase();
+      if (mk.includes('IOT')) iot++;
+      else if (mk.includes('ALGO')) algo++;
+      else ppk++;
+    });
+    return { ppk, iot, algo, total: submissions.length };
+  }, [submissions]);
+
+  // Filter daftar kuis sesuai mata kuliah yang sedang aktif
+  const filteredQuizList = useMemo(() => {
+    if (courseFilter === 'ALL') return quizList;
+    return quizList.filter((q) => {
+      const qCourse = String(q.mata_kuliah || '').toUpperCase();
+      const qId = String(q.quiz_id || '').toUpperCase();
+      if (courseFilter === 'IOT') return qCourse.includes('IOT') || qId.includes('IOT');
+      if (courseFilter === 'PPK') return qCourse.includes('PPK') || (!qCourse.includes('IOT') && !qCourse.includes('ALGO'));
+      if (courseFilter === 'ALGO') return qCourse.includes('ALGO') || qId.includes('ALGO');
+      return true;
+    });
+  }, [quizList, courseFilter]);
+
+  // Memoized Filtered Submissions (dengan pemisahan mata kuliah)
   const filteredSubmissions = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     const list = submissions.filter((sub) => {
+      // 1. Filter Mata Kuliah (PPK vs IoT vs Algoritma Evolusioner)
+      if (courseFilter !== 'ALL') {
+        const subCourse = String(sub.mata_kuliah || '').toUpperCase();
+        if (courseFilter === 'IOT' && !subCourse.includes('IOT')) return false;
+        if (courseFilter === 'PPK' && !subCourse.includes('PPK') && !subCourse.includes('PERANGKAT KERAS')) return false;
+        if (courseFilter === 'ALGO' && !subCourse.includes('ALGO') && !subCourse.includes('EVOLUSIONER')) return false;
+      }
       if (quizFilter !== 'ALL' && String(sub.quiz_id) !== String(quizFilter)) {
         return false;
       }
@@ -293,6 +332,7 @@ export function AdminDashboardPage() {
     return list;
   }, [
     submissions,
+    courseFilter,
     quizFilter,
     classFilter,
     statusFilter,
@@ -301,10 +341,43 @@ export function AdminDashboardPage() {
     sortKey,
   ]);
 
-  // Memoized Filtered Live Sessions
+  // Hitung jumlah mahasiswa per kelas secara dinamis sesuai filter yang dipilih
+  const classCounts = useMemo(() => {
+    const counts = { A: 0, B: 0, C: 0, D: 0 };
+    filteredSubmissions.forEach((s) => {
+      const k = String(s.kelas || '').trim().toUpperCase();
+      if (counts[k] !== undefined) counts[k]++;
+    });
+    return counts;
+  }, [filteredSubmissions]);
+
+  // Auto-reset halaman ke-1 saat filter berubah
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [courseFilter, quizFilter, classFilter, statusFilter, violationFilter, searchQuery, sortKey]);
+
+  // Paginasi Data Submissions (Menjaga performa tetap sub-millisecond)
+  const totalItems = filteredSubmissions.length;
+  const numericPageSize = pageSize === 'ALL' ? totalItems || 1 : Number(pageSize) || 25;
+  const totalPages = Math.max(1, Math.ceil(totalItems / numericPageSize));
+  const safeCurrentPage = Math.min(Math.max(1, currentPage), totalPages);
+
+  const paginatedSubmissions = useMemo(() => {
+    if (pageSize === 'ALL') return filteredSubmissions;
+    const start = (safeCurrentPage - 1) * numericPageSize;
+    return filteredSubmissions.slice(start, start + numericPageSize);
+  }, [filteredSubmissions, safeCurrentPage, pageSize, numericPageSize]);
+
+  // Memoized Filtered Live Sessions (dengan pemisahan mata kuliah)
   const filteredLiveSessions = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     return liveSessions.filter((s) => {
+      if (courseFilter !== 'ALL') {
+        const sCourse = String(s.mataKuliah || s.mata_kuliah || '').toUpperCase();
+        if (courseFilter === 'IOT' && !sCourse.includes('IOT')) return false;
+        if (courseFilter === 'PPK' && !sCourse.includes('PPK') && !sCourse.includes('PERANGKAT KERAS')) return false;
+        if (courseFilter === 'ALGO' && !sCourse.includes('ALGO') && !sCourse.includes('EVOLUSIONER')) return false;
+      }
       if (quizFilter !== 'ALL' && String(s.quizId) !== String(quizFilter)) {
         return false;
       }
@@ -319,13 +392,13 @@ export function AdminDashboardPage() {
       }
       return true;
     });
-  }, [liveSessions, quizFilter, classFilter, searchQuery]);
+  }, [liveSessions, courseFilter, quizFilter, classFilter, searchQuery]);
 
   // Summary Stats
   const stats = useMemo(() => {
     const total = filteredSubmissions.length;
     const graded = filteredSubmissions.filter(
-      (s) => s.grade !== null && s.grade !== undefined
+      (s) => s.grade !== null && s.grade !== undefined && s.grade !== ''
     );
     const avg =
       graded.length > 0
@@ -335,11 +408,11 @@ export function AdminDashboardPage() {
           ).toFixed(1)
         : '-';
     // Hanya hitung mahasiswa yang statusnya ACTIVE dan belum diskualifikasi/selesai
-    const activeOnline = liveSessions.filter(
+    const activeOnline = filteredLiveSessions.filter(
       (s) => s.status === 'ACTIVE'
     ).length;
     return { total, gradedCount: graded.length, avg, activeOnline };
-  }, [filteredSubmissions, liveSessions]);
+  }, [filteredSubmissions, filteredLiveSessions]);
 
   const handleAutoGradeSingle = useCallback(
     async (submissionId) => {
@@ -473,6 +546,7 @@ export function AdminDashboardPage() {
     // 3. Susun Header Kolom Lengkap & Padat
     const headers = [
       'No',
+      'Mata Kuliah',
       'NIM',
       'Nama Mahasiswa',
       'Kelas',
@@ -525,8 +599,11 @@ export function AdminDashboardPage() {
           ? 'Di Luar Area Kampus'
           : s.location_status || '-';
 
+      const mkName = s.mata_kuliah || 'PPK';
+
       const row = [
         idx + 1,
+        escapeCsv(mkName),
         escapeCsv(s.nim || ''),
         escapeCsv(s.nama || ''),
         escapeCsv(s.kelas || '-'),
@@ -567,9 +644,10 @@ export function AdminDashboardPage() {
     const a = document.createElement('a');
     a.href = url;
     const dateStr = new Date().toISOString().slice(0, 10);
+    const courseStr = courseFilter !== 'ALL' ? `_${courseFilter}` : '';
     const quizName = quizFilter !== 'ALL' ? `Quiz_${quizFilter}` : 'Semua_Quiz';
     const classStr = classFilter !== 'ALL' ? `_Kelas_${classFilter}` : '';
-    a.download = `Rekap_Lengkap_Jawaban_${quizName}${classStr}_${dateStr}.csv`;
+    a.download = `Rekap_Lengkap_Jawaban${courseStr}_${quizName}${classStr}_${dateStr}.csv`;
     a.click();
     URL.revokeObjectURL(url);
     showToast(`Berhasil mengekspor ${filteredSubmissions.length} jawaban mahasiswa!`, 'success');
@@ -715,6 +793,66 @@ export function AdminDashboardPage() {
       {/* TAB 1 & 2 SHARED COMPACT FILTER BAR */}
       {(activeTab === 'SUBMISSIONS' || activeTab === 'LIVE') && (
         <div className="compact-filter-bar no-print">
+          {/* PEMISAHAN MATA KULIAH (PPK vs IoT vs Algoritma Evolusioner) */}
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: '0.82rem', fontWeight: 800, color: '#334155', display: 'flex', alignItems: 'center', gap: 5 }}>
+              <span>📚</span> Mata Kuliah:
+            </span>
+            <button
+              type="button"
+              className={`btn btn-xs btn-touchable ${courseFilter === 'ALL' ? 'btn-primary' : 'btn-outline'}`}
+              onClick={() => { setCourseFilter('ALL'); setQuizFilter('ALL'); }}
+              style={{ padding: '6px 12px', borderRadius: 8, fontWeight: 700 }}
+            >
+              🌐 Semua Mata Kuliah ({courseCounts.total})
+            </button>
+            <button
+              type="button"
+              className={`btn btn-xs btn-touchable ${courseFilter === 'PPK' ? 'btn-primary' : 'btn-outline'}`}
+              onClick={() => { setCourseFilter('PPK'); setQuizFilter('ALL'); }}
+              style={{
+                padding: '6px 12px',
+                borderRadius: 8,
+                fontWeight: 700,
+                background: courseFilter === 'PPK' ? '#4f46e5' : '#ffffff',
+                borderColor: courseFilter === 'PPK' ? '#4f46e5' : '#cbd5e1',
+                color: courseFilter === 'PPK' ? '#ffffff' : '#334155',
+              }}
+            >
+              ⚙️ PPK ({courseCounts.ppk})
+            </button>
+            <button
+              type="button"
+              className={`btn btn-xs btn-touchable ${courseFilter === 'IOT' ? 'btn-primary' : 'btn-outline'}`}
+              onClick={() => { setCourseFilter('IOT'); setQuizFilter('ALL'); }}
+              style={{
+                padding: '6px 12px',
+                borderRadius: 8,
+                fontWeight: 700,
+                background: courseFilter === 'IOT' ? '#0284c7' : '#ffffff',
+                borderColor: courseFilter === 'IOT' ? '#0284c7' : '#cbd5e1',
+                color: courseFilter === 'IOT' ? '#ffffff' : '#334155',
+              }}
+            >
+              📡 Internet of Things / IoT ({courseCounts.iot})
+            </button>
+            <button
+              type="button"
+              className={`btn btn-xs btn-touchable ${courseFilter === 'ALGO' ? 'btn-primary' : 'btn-outline'}`}
+              onClick={() => { setCourseFilter('ALGO'); setQuizFilter('ALL'); }}
+              style={{
+                padding: '6px 12px',
+                borderRadius: 8,
+                fontWeight: 700,
+                background: courseFilter === 'ALGO' ? '#7e22ce' : '#ffffff',
+                borderColor: courseFilter === 'ALGO' ? '#7e22ce' : '#cbd5e1',
+                color: courseFilter === 'ALGO' ? '#ffffff' : '#334155',
+              }}
+            >
+              🧬 Algoritma Evolusioner ({courseCounts.algo})
+            </button>
+          </div>
+
           {/* BARIS 1: SEMUA FILTER (SIMETRIS & RAPI) */}
           <div className="filter-row" style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
             <input
@@ -732,9 +870,9 @@ export function AdminDashboardPage() {
               onChange={(e) => setQuizFilter(e.target.value)}
             >
               <option value="ALL">📚 Semua Quiz ID</option>
-              {quizList.map((q) => (
+              {filteredQuizList.map((q) => (
                 <option key={q.quiz_id} value={q.quiz_id}>
-                  Quiz #{q.quiz_id} ({q.total_questions || 0} Soal)
+                  Quiz #{q.quiz_id} ({q.total_questions || 0} Soal - {q.mata_kuliah || 'PPK'})
                 </option>
               ))}
             </select>
@@ -745,10 +883,10 @@ export function AdminDashboardPage() {
               onChange={(e) => setClassFilter(e.target.value)}
             >
               <option value="ALL">🏫 Semua Kelas</option>
-              <option value="A">Kelas A (50 mhs)</option>
-              <option value="B">Kelas B (49 mhs)</option>
-              <option value="C">Kelas C (51 mhs)</option>
-              <option value="D">Kelas D (47 mhs)</option>
+              <option value="A">Kelas A ({classCounts.A} mhs)</option>
+              <option value="B">Kelas B ({classCounts.B} mhs)</option>
+              <option value="C">Kelas C ({classCounts.C} mhs)</option>
+              <option value="D">Kelas D ({classCounts.D} mhs)</option>
             </select>
 
             {activeTab === 'SUBMISSIONS' && (
@@ -778,6 +916,7 @@ export function AdminDashboardPage() {
             )}
 
             {(searchQuery ||
+              courseFilter !== 'ALL' ||
               quizFilter !== 'ALL' ||
               classFilter !== 'ALL' ||
               statusFilter !== 'ALL' ||
@@ -788,6 +927,7 @@ export function AdminDashboardPage() {
                 className="btn btn-outline btn-sm btn-touchable"
                 onClick={() => {
                   setSearchQuery('');
+                  setCourseFilter('ALL');
                   setQuizFilter('ALL');
                   setClassFilter('ALL');
                   setStatusFilter('ALL');
@@ -816,15 +956,17 @@ export function AdminDashboardPage() {
           >
             {activeTab === 'SUBMISSIONS' ? (
               <div>
-                Menampilkan <strong style={{ color: '#0f172a' }}>{filteredSubmissions.length}</strong>{' '}
-                dari total <strong style={{ color: '#0f172a' }}>{submissions.length}</strong> data jawaban mahasiswa.
+                Menampilkan <strong style={{ color: '#0f172a' }}>
+                  {totalItems === 0 ? 0 : (safeCurrentPage - 1) * numericPageSize + 1} - {Math.min(safeCurrentPage * numericPageSize, totalItems)}
+                </strong>{' '}
+                (Hal. <strong>{safeCurrentPage}</strong> dari <strong>{totalPages}</strong>) dari total <strong style={{ color: '#0f172a' }}>{totalItems}</strong> data terfilter ({submissions.length} total sistem).
                 <span style={{ marginLeft: 12, padding: '2px 8px', background: '#f1f5f9', borderRadius: 6, fontWeight: 700 }}>
                   Rata-rata Nilai: <strong style={{ color: '#4f46e5' }}>{stats.avg}</strong>
                 </span>
               </div>
             ) : (
               <div>
-                Memantau <strong style={{ color: '#0f172a' }}>{filteredLiveSessions.length}</strong> sesi live mahasiswa.
+                Memantau <strong style={{ color: '#0f172a' }}>{filteredLiveSessions.length}</strong> sesi live mahasiswa ({courseFilter === 'ALL' ? 'Semua Mata Kuliah' : courseFilter}).
               </div>
             )}
 
@@ -947,10 +1089,10 @@ export function AdminDashboardPage() {
                     </td>
                   </tr>
                 ) : (
-                  filteredSubmissions.map((sub, idx) => (
+                  paginatedSubmissions.map((sub, idx) => (
                     <SubmissionRow
                       key={sub.id}
-                      index={idx}
+                      index={(safeCurrentPage - 1) * (pageSize === 'ALL' ? 0 : Number(pageSize)) + idx}
                       sub={sub}
                       role={role}
                       onSaveGrade={handleSaveGrade}
@@ -992,6 +1134,125 @@ export function AdminDashboardPage() {
                 )}
               </tbody>
             </table>
+          </div>
+
+          {/* BAR KONTROL PAGINASI CEPAT (SUB-MILLISECOND SMOOTH) */}
+          <div
+            className="pagination-bar no-print"
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              padding: '12px 18px',
+              background: '#ffffff',
+              borderTop: '1px solid #e2e8f0',
+              flexWrap: 'wrap',
+              gap: 12,
+            }}
+          >
+            <div style={{ fontSize: '0.82rem', color: '#475569', display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span>📄 Menampilkan</span>
+              <strong style={{ color: '#0f172a' }}>
+                {totalItems === 0 ? 0 : (safeCurrentPage - 1) * numericPageSize + 1} - {Math.min(safeCurrentPage * numericPageSize, totalItems)}
+              </strong>
+              <span>dari total</span>
+              <strong style={{ color: '#0f172a' }}>{totalItems}</strong>
+              <span>mahasiswa ({courseFilter === 'ALL' ? 'Semua Mata Kuliah' : courseFilter})</span>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+              <button
+                type="button"
+                className="btn btn-outline btn-xs"
+                onClick={() => setCurrentPage(1)}
+                disabled={safeCurrentPage <= 1}
+                title="Halaman Pertama"
+                style={{ padding: '5px 9px', borderRadius: 6, fontWeight: 700 }}
+              >
+                ⏮
+              </button>
+              <button
+                type="button"
+                className="btn btn-outline btn-xs"
+                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                disabled={safeCurrentPage <= 1}
+                title="Halaman Sebelumnya"
+                style={{ padding: '5px 10px', borderRadius: 6, fontWeight: 700 }}
+              >
+                ◀ Prev
+              </button>
+
+              {/* Tombol Nomor Halaman dengan Windowing Pintar */}
+              {Array.from({ length: totalPages }, (_, i) => i + 1)
+                .filter((p) => p === 1 || p === totalPages || Math.abs(p - safeCurrentPage) <= 2)
+                .map((p, idx, arr) => {
+                  const prev = arr[idx - 1];
+                  const isCurrent = p === safeCurrentPage;
+                  return (
+                    <React.Fragment key={p}>
+                      {prev && p - prev > 1 && (
+                        <span style={{ padding: '0 4px', color: '#94a3b8', fontSize: '0.8rem' }}>…</span>
+                      )}
+                      <button
+                        type="button"
+                        className={`btn btn-xs ${isCurrent ? 'btn-primary' : 'btn-outline'}`}
+                        onClick={() => setCurrentPage(p)}
+                        style={{
+                          minWidth: 32,
+                          padding: '5px 8px',
+                          borderRadius: 6,
+                          fontWeight: isCurrent ? 800 : 600,
+                          background: isCurrent ? '#4f46e5' : '#ffffff',
+                          borderColor: isCurrent ? '#4f46e5' : '#cbd5e1',
+                          color: isCurrent ? '#ffffff' : '#334155',
+                        }}
+                      >
+                        {p}
+                      </button>
+                    </React.Fragment>
+                  );
+                })}
+
+              <button
+                type="button"
+                className="btn btn-outline btn-xs"
+                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                disabled={safeCurrentPage >= totalPages}
+                title="Halaman Berikutnya"
+                style={{ padding: '5px 10px', borderRadius: 6, fontWeight: 700 }}
+              >
+                Next ▶
+              </button>
+              <button
+                type="button"
+                className="btn btn-outline btn-xs"
+                onClick={() => setCurrentPage(totalPages)}
+                disabled={safeCurrentPage >= totalPages}
+                title="Halaman Terakhir"
+                style={{ padding: '5px 9px', borderRadius: 6, fontWeight: 700 }}
+              >
+                ⏭
+              </button>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.82rem', color: '#475569' }}>
+              <span>Baris per halaman:</span>
+              <select
+                className="filter-select"
+                value={pageSize}
+                onChange={(e) => {
+                  setPageSize(e.target.value === 'ALL' ? 'ALL' : Number(e.target.value));
+                  setCurrentPage(1);
+                }}
+                style={{ padding: '4px 8px', fontSize: '0.8rem', fontWeight: 700 }}
+              >
+                <option value={15}>15 baris</option>
+                <option value={25}>25 baris</option>
+                <option value={50}>50 baris</option>
+                <option value={100}>100 baris</option>
+                <option value="ALL">Semua ({totalItems})</option>
+              </select>
+            </div>
           </div>
         </div>
       )}

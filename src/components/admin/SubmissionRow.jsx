@@ -58,6 +58,38 @@ export const SubmissionRow = memo(function SubmissionRow({
         <div style={{ fontWeight: 700, color: '#0f172a' }}>{sub.nama || '-'}</div>
         <div style={{ fontSize: '0.75rem', color: '#64748b' }}>NIM: {sub.nim || '-'}</div>
         <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 4 }}>
+          {sub.mata_kuliah && (
+            <span
+              className="badge"
+              style={{
+                fontSize: '0.68rem',
+                fontWeight: 800,
+                background: String(sub.mata_kuliah).toUpperCase().includes('IOT')
+                  ? '#e0f2fe'
+                  : String(sub.mata_kuliah).toUpperCase().includes('ALGO')
+                  ? '#f3e8ff'
+                  : '#e0e7ff',
+                color: String(sub.mata_kuliah).toUpperCase().includes('IOT')
+                  ? '#0369a1'
+                  : String(sub.mata_kuliah).toUpperCase().includes('ALGO')
+                  ? '#7e22ce'
+                  : '#4338ca',
+                border: `1px solid ${
+                  String(sub.mata_kuliah).toUpperCase().includes('IOT')
+                    ? '#bae6fd'
+                    : String(sub.mata_kuliah).toUpperCase().includes('ALGO')
+                    ? '#e9d5ff'
+                    : '#c7d2fe'
+                }`,
+              }}
+            >
+              {String(sub.mata_kuliah).toUpperCase().includes('IOT')
+                ? '📡 IoT'
+                : String(sub.mata_kuliah).toUpperCase().includes('ALGO')
+                ? '🧬 Algo'
+                : '⚙️ PPK'}
+            </span>
+          )}
           {sub.kelas && sub.kelas !== '-' && (
             <span
               className="badge badge-success"

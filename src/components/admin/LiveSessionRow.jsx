@@ -48,6 +48,38 @@ export const LiveSessionRow = memo(function LiveSessionRow({ index, session, onV
         </div>
         <div style={{ fontSize: '0.75rem', color: '#64748b' }}>NIM: {session.nim}</div>
         <div style={{ display: 'flex', gap: 4, marginTop: 4, flexWrap: 'wrap' }}>
+          {(session.mataKuliah || session.mata_kuliah) && (
+            <span
+              className="badge"
+              style={{
+                fontSize: '0.68rem',
+                fontWeight: 800,
+                background: String(session.mataKuliah || session.mata_kuliah).toUpperCase().includes('IOT')
+                  ? '#e0f2fe'
+                  : String(session.mataKuliah || session.mata_kuliah).toUpperCase().includes('ALGO')
+                  ? '#f3e8ff'
+                  : '#e0e7ff',
+                color: String(session.mataKuliah || session.mata_kuliah).toUpperCase().includes('IOT')
+                  ? '#0369a1'
+                  : String(session.mataKuliah || session.mata_kuliah).toUpperCase().includes('ALGO')
+                  ? '#7e22ce'
+                  : '#4338ca',
+                border: `1px solid ${
+                  String(session.mataKuliah || session.mata_kuliah).toUpperCase().includes('IOT')
+                    ? '#bae6fd'
+                    : String(session.mataKuliah || session.mata_kuliah).toUpperCase().includes('ALGO')
+                    ? '#e9d5ff'
+                    : '#c7d2fe'
+                }`,
+              }}
+            >
+              {String(session.mataKuliah || session.mata_kuliah).toUpperCase().includes('IOT')
+                ? '📡 IoT'
+                : String(session.mataKuliah || session.mata_kuliah).toUpperCase().includes('ALGO')
+                ? '🧬 Algo'
+                : '⚙️ PPK'}
+            </span>
+          )}
           {session.kelas && session.kelas !== '-' && (
             <span
               className="badge badge-success"
