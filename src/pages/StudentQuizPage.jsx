@@ -929,10 +929,34 @@ export function StudentQuizPage() {
     };
 
     const onWindowBlur = () => {
-      if (Date.now() - lastSwitchMs > 1200) {
-        lastSwitchMs = Date.now();
-        recordViolation('WINDOW_BLUR', 'Keluar dari fokus jendela ujian');
-      }
+      // Di perangkat mobile / layar sentuh, menutup keyboard virtual, menekan tombol back untuk sembunyikan keyboard,
+      // atau pergeseran fokus input memicu event window.blur palsu padahal mahasiswa tetap berada di tab ujian.
+      // Pelanggaran HANYA dicatat jika dokumen benar-benar tidak aktif / tersembunyi (document.hidden === true)
+      // atau jendela desktop benar-benar kehilangan fokus dalam jangka waktu stabil.
+      setTimeout(() => {
+        if (document.hidden) {
+          // Sudah di-handle oleh visibilitychange
+          return;
+        }
+
+        // Jika dokumen masih terlihat di layar (terutama pada perangkat mobile / touch),
+        // penutupan keyboard virtual tidak boleh dianggap sebagai pelanggaran.
+        const isTouchOrMobile =
+          /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+          (window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+
+        if (isTouchOrMobile) {
+          return;
+        }
+
+        // Untuk desktop: jika setelah 450ms jendela masih benar-benar tidak memiliki fokus
+        if (typeof document.hasFocus === 'function' && !document.hasFocus()) {
+          if (Date.now() - lastSwitchMs > 1500) {
+            lastSwitchMs = Date.now();
+            recordViolation('WINDOW_BLUR', 'Keluar dari fokus jendela ujian');
+          }
+        }
+      }, 450);
     };
 
     document.addEventListener('visibilitychange', onVisChange);

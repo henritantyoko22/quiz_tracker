@@ -653,6 +653,115 @@ export function AdminDashboardPage() {
     showToast(`Berhasil mengekspor ${filteredSubmissions.length} jawaban mahasiswa!`, 'success');
   };
 
+  const handleExportJSON = async () => {
+    if (filteredSubmissions.length === 0) {
+      showToast('Tidak ada data submission untuk diekspor', 'error');
+      return;
+    }
+
+    showToast('⏳ Mempersiapkan data JSON untuk AI...', 'info');
+
+    // 1. Ambil seluruh data soal & kunci jawaban untuk Quiz ID yang terlibat
+    const uniqueQuizIds = [
+      ...new Set(
+        filteredSubmissions
+          .map((s) => String(s.quiz_id || '').trim())
+          .filter(Boolean)
+      ),
+    ];
+    const quizQuestionMap = {};
+
+    await Promise.all(
+      uniqueQuizIds.map(async (qId) => {
+        try {
+          const res = await fetch(
+            `${API_BASE}/v1/quiz/questions/${encodeURIComponent(qId)}`
+          );
+          const d = await res.json();
+          if (res.ok && Array.isArray(d.data)) {
+            quizQuestionMap[qId] = d.data;
+          }
+        } catch (_) {}
+      })
+    );
+
+    // 2. Susun Payload JSON terstruktur khusus untuk AI input
+    const exportPayload = {
+      meta: {
+        judul: 'Rekap Jawaban Ujian Mahasiswa',
+        tanggal_ekspor: new Date().toISOString(),
+        mata_kuliah: courseFilter,
+        quiz_id: quizFilter,
+        kelas_filter: classFilter,
+        total_mahasiswa: filteredSubmissions.length,
+      },
+      daftar_soal_per_quiz: quizQuestionMap,
+      submissions: filteredSubmissions.map((s, idx) => {
+        const ansObj = parseAnswersObject(s.answers);
+        const qList = quizQuestionMap[String(s.quiz_id || '').trim()] || [];
+
+        const statusText =
+          s.status === 'DISQUALIFIED'
+            ? 'Diskualifikasi'
+            : s.status === 'TIME_EXPIRED'
+            ? 'Waktu Habis'
+            : 'Selesai Mandiri';
+
+        const detailJawaban = qList.map((qItem, qIdx) => {
+          const qNum = qIdx + 1;
+          const ans =
+            ansObj[`soal_${qNum}`] ||
+            ansObj[String(qNum)] ||
+            ansObj[qNum] ||
+            ansObj[`Soal ${qNum}`] ||
+            ansObj[`soal${qNum}`] ||
+            ansObj[Object.keys(ansObj)[qIdx]] ||
+            '(Tidak dijawab)';
+
+          return {
+            nomor_soal: qNum,
+            pertanyaan: qItem.question_text || '',
+            kunci_jawaban_diharapkan: qItem.expected_answer || null,
+            jawaban_mahasiswa: ans,
+          };
+        });
+
+        return {
+          no: idx + 1,
+          nim: s.nim || '',
+          nama: s.nama || '',
+          kelas: s.kelas || '-',
+          mata_kuliah: s.mata_kuliah || 'PPK',
+          quiz_id: s.quiz_id || '',
+          attempt: s.attempt || 1,
+          status_ujian: statusText,
+          nilai: s.grade !== null && s.grade !== undefined && s.grade !== '' ? Number(s.grade) : null,
+          catatan_feedback_dosen: s.feedback || '',
+          durasi_detik: Number(s.duration_seconds) || 0,
+          durasi_terbaca: formatDuration(Number(s.duration_seconds || 0)),
+          jumlah_pelanggaran: s.violation_count || 0,
+          lokasi_status: s.location_status || '-',
+          jarak_ke_kampus_meter: s.location_distance_meters || null,
+          detail_jawaban: detailJawaban,
+        };
+      }),
+    };
+
+    const jsonString = JSON.stringify(exportPayload, null, 2);
+    const blob = new Blob([jsonString], { type: 'application/json;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const dateStr = new Date().toISOString().slice(0, 10);
+    const courseStr = courseFilter !== 'ALL' ? `_${courseFilter}` : '';
+    const quizName = quizFilter !== 'ALL' ? `Quiz_${quizFilter}` : 'Semua_Quiz';
+    const classStr = classFilter !== 'ALL' ? `_Kelas_${classFilter}` : '';
+    a.download = `Rekap_AI${courseStr}_${quizName}${classStr}_${dateStr}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast(`Berhasil mengekspor format JSON untuk AI (${filteredSubmissions.length} data)!`, 'success');
+  };
+
   if (!token) {
     return (
       <div className="login-overlay">
@@ -1024,6 +1133,16 @@ export function AdminDashboardPage() {
                     onClick={handleExportCSV}
                   >
                     📥 Export CSV
+                  </button>
+
+                  <button
+                    type="button"
+                    className="btn btn-outline btn-sm btn-touchable"
+                    style={{ borderColor: '#6366f1', color: '#4f46e5', fontWeight: 700 }}
+                    onClick={handleExportJSON}
+                    title="Ekspor data terstruktur beserta butir soal & kunci jawaban dalam format JSON untuk dianalisis oleh AI (Gemini / ChatGPT / Claude)"
+                  >
+                    🤖 Export JSON (AI)
                   </button>
 
                   {(role === 'SUPERADMIN' || role === 'DOSEN') && (

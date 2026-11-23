@@ -69,6 +69,7 @@ export function UnifiedQuizManager({ token, quizList, onRefreshQuizList, showToa
   const [savingAll, setSavingAll] = useState(false);
   const [editorMode, setEditorMode] = useState('VISUAL'); // VISUAL | JSON
   const [jsonText, setJsonText] = useState('');
+  const prevLoadedQuizIdRef = useRef('');
 
   useEffect(() => {
     if (!selectedQuizId && quizList.length > 0) {
@@ -129,18 +130,20 @@ export function UnifiedQuizManager({ token, quizList, onRefreshQuizList, showToa
           id: q.id,
           questionText: q.question_text || '',
           questionType: q.question_type || 'ESSAY',
+          expectedAnswer: q.expected_answer || '',
         }));
 
         setQuestions(
           loadedQuestions.length > 0
             ? loadedQuestions
-            : [{ questionText: '', questionType: 'ESSAY' }]
+            : [{ questionText: '', questionType: 'ESSAY', expectedAnswer: '' }]
         );
         setJsonText(
           JSON.stringify(
             loadedQuestions.map((q) => ({
               question_text: q.questionText,
               question_type: q.questionType,
+              expected_answer: q.expectedAnswer,
             })),
             null,
             2
@@ -152,11 +155,12 @@ export function UnifiedQuizManager({ token, quizList, onRefreshQuizList, showToa
         setLoadingQuiz(false);
       }
     },
-    [quizList, showToast]
+    [showToast]
   );
 
   useEffect(() => {
-    if (selectedQuizId) {
+    if (selectedQuizId && selectedQuizId !== prevLoadedQuizIdRef.current) {
+      prevLoadedQuizIdRef.current = selectedQuizId;
       loadQuizDetails(selectedQuizId);
     }
   }, [selectedQuizId, loadQuizDetails]);
@@ -174,8 +178,8 @@ export function UnifiedQuizManager({ token, quizList, onRefreshQuizList, showToa
     setEndTime('');
     setGradingRubric('');
     setAutoGrade(false);
-    setQuestions([{ questionText: '', questionType: 'ESSAY' }]);
-    setJsonText('[\n  {\n    "question_text": "Tuliskan pertanyaan soal 1..."\n  }\n]');
+    setQuestions([{ questionText: '', questionType: 'ESSAY', expectedAnswer: '' }]);
+    setJsonText('[\n  {\n    "question_text": "Tuliskan pertanyaan soal 1...",\n    "expected_answer": "Kunci jawaban atau poin konsep yang diharapkan..."\n  }\n]');
   };
 
   const handleQuestionChange = (index, value) => {
@@ -186,8 +190,16 @@ export function UnifiedQuizManager({ token, quizList, onRefreshQuizList, showToa
     });
   };
 
+  const handleExpectedAnswerChange = (index, value) => {
+    setQuestions((prev) => {
+      const copy = [...prev];
+      copy[index] = { ...copy[index], expectedAnswer: value };
+      return copy;
+    });
+  };
+
   const handleAddQuestionRow = () => {
-    setQuestions((prev) => [...prev, { questionText: '', questionType: 'ESSAY' }]);
+    setQuestions((prev) => [...prev, { questionText: '', questionType: 'ESSAY', expectedAnswer: '' }]);
   };
 
   const handleRemoveQuestionRow = async (index) => {
@@ -202,7 +214,7 @@ export function UnifiedQuizManager({ token, quizList, onRefreshQuizList, showToa
     }
     setQuestions((prev) => {
       const next = prev.filter((_, i) => i !== index);
-      return next.length > 0 ? next : [{ questionText: '', questionType: 'ESSAY' }];
+      return next.length > 0 ? next : [{ questionText: '', questionType: 'ESSAY', expectedAnswer: '' }];
     });
   };
 
@@ -223,6 +235,9 @@ export function UnifiedQuizManager({ token, quizList, onRefreshQuizList, showToa
               item.question_text || item.questionText || item.question || ''
             ).trim(),
             question_type: item.question_type || item.questionType || 'ESSAY',
+            expected_answer: String(
+              item.expected_answer || item.expectedAnswer || item.kunci_jawaban || ''
+            ).trim(),
           }))
           .filter((q) => q.question_text.length > 0);
       } catch (err) {
@@ -234,6 +249,7 @@ export function UnifiedQuizManager({ token, quizList, onRefreshQuizList, showToa
         .map((q) => ({
           question_text: String(q.questionText || '').trim(),
           question_type: q.questionType || 'ESSAY',
+          expected_answer: String(q.expectedAnswer || '').trim(),
         }))
         .filter((q) => q.question_text.length > 0);
     }
@@ -691,6 +707,7 @@ export function UnifiedQuizManager({ token, quizList, onRefreshQuizList, showToa
                       JSON.stringify(
                         questions.map((q) => ({
                           question_text: q.questionText,
+                          expected_answer: q.expectedAnswer || '',
                           question_type: q.questionType || 'ESSAY',
                         })),
                         null,
@@ -706,39 +723,73 @@ export function UnifiedQuizManager({ token, quizList, onRefreshQuizList, showToa
             </div>
 
             {editorMode === 'VISUAL' ? (
-              <div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                 {questions.map((q, idx) => (
-                  <div key={q.id || idx} className="question-item-row">
-                    <div className="q-num">{idx + 1}</div>
-                    <textarea
-                      placeholder={`Tuliskan pertanyaan soal nomor ${idx + 1}...`}
-                      value={q.questionText}
-                      onChange={(e) => handleQuestionChange(idx, e.target.value)}
-                    />
-                    <button
-                      type="button"
-                      className="btn btn-danger btn-xs"
-                      onClick={() => handleRemoveQuestionRow(idx)}
-                      title="Hapus soal ini"
-                    >
-                      🗑️
-                    </button>
+                  <div
+                    key={q.id || idx}
+                    style={{
+                      border: '1px solid #e2e8f0',
+                      borderRadius: 10,
+                      padding: '12px 14px',
+                      background: '#f8fafc',
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                      <span style={{ background: '#4f46e5', color: '#ffffff', padding: '3px 8px', borderRadius: 4, fontSize: '0.75rem', fontWeight: 800 }}>
+                        SOAL #{idx + 1}
+                      </span>
+                      <button
+                        type="button"
+                        className="btn btn-danger btn-xs"
+                        onClick={() => handleRemoveQuestionRow(idx)}
+                        title="Hapus butir soal ini"
+                        style={{ padding: '2px 8px', fontSize: '0.72rem' }}
+                      >
+                        🗑️ Hapus Soal
+                      </button>
+                    </div>
+
+                    <div style={{ marginBottom: 8 }}>
+                      <label style={{ fontSize: '0.75rem', fontWeight: 700, color: '#334155', display: 'block', marginBottom: 4 }}>
+                        Pertanyaan Soal:
+                      </label>
+                      <textarea
+                        rows={2}
+                        placeholder={`Tuliskan butir pertanyaan nomor ${idx + 1}...`}
+                        value={q.questionText}
+                        onChange={(e) => handleQuestionChange(idx, e.target.value)}
+                        style={{ width: '100%', boxSizing: 'border-box', padding: '8px 10px', borderRadius: 6, border: '1px solid #cbd5e1', fontSize: '0.86rem' }}
+                      />
+                    </div>
+
+                    <div>
+                      <label style={{ fontSize: '0.75rem', fontWeight: 700, color: '#047857', display: 'flex', alignItems: 'center', gap: 4, marginBottom: 4 }}>
+                        <span>🔑</span> Kunci Jawaban / Jawaban yang Diharapkan (Opsional - Panduan AI & Dosen):
+                      </label>
+                      <textarea
+                        rows={2}
+                        placeholder="Tuliskan poin kunci jawaban, kata kunci konsep, atau jawaban ideal untuk mempermudah penilaian AI..."
+                        value={q.expectedAnswer || ''}
+                        onChange={(e) => handleExpectedAnswerChange(idx, e.target.value)}
+                        style={{ width: '100%', boxSizing: 'border-box', padding: '8px 10px', borderRadius: 6, border: '1px solid #a7f3d0', background: '#f0fdf4', fontSize: '0.84rem' }}
+                      />
+                    </div>
                   </div>
                 ))}
                 <button
                   type="button"
                   className="btn btn-outline btn-sm"
                   onClick={handleAddQuestionRow}
-                  style={{ width: '100%', justifyContent: 'center', marginTop: 6 }}
+                  style={{ width: '100%', justifyContent: 'center', marginTop: 4 }}
                 >
-                  + Tambah Baris Soal Baru
+                  + Tambah Butir Soal Baru
                 </button>
               </div>
             ) : (
               <div className="field-group">
                 <label>
                   Format JSON Array (Contoh:{' '}
-                  <code>[{`{"question_text": "Jelaskan konsep OOP..."}`}]</code>)
+                  <code>[{`{"question_text": "...", "expected_answer": "..."}`}]</code>)
                 </label>
                 <textarea
                   rows={10}

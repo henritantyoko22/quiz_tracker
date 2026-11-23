@@ -400,6 +400,12 @@ async function initDbTables() {
       ADD COLUMN IF NOT EXISTS gemini_model VARCHAR(50) DEFAULT 'gemini-1.5-flash';
     `);
 
+    // Kolom kunci jawaban / expected_answer pada quiz_questions
+    await db.query(`
+      ALTER TABLE quiz_questions 
+      ADD COLUMN IF NOT EXISTS expected_answer TEXT;
+    `);
+
     // 3. Tambahkan kolom violation_count & max_violations di quiz_submissions
     await db.query(`
       ALTER TABLE quiz_submissions 
@@ -648,7 +654,8 @@ app.get('/v1/quiz/settings/:quizId', async (req, res) => {
               COALESCE(target_lat, -7.050500) AS target_lat,
               COALESCE(target_lng, 110.443800) AS target_lng,
               COALESCE(target_radius_meters, 450) AS target_radius_meters,
-              COALESCE(target_location_name, 'Fakultas Sains dan Matematika (FSM) Undip') AS target_location_name
+              COALESCE(target_location_name, 'Fakultas Sains dan Matematika (FSM) Undip') AS target_location_name,
+              COALESCE(mata_kuliah, 'PPK') AS mata_kuliah
        FROM quiz_settings 
        WHERE quiz_id = $1`,
       [cleanQuizId]
@@ -803,7 +810,7 @@ app.get('/v1/quiz/questions/:quizId', async (req, res) => {
 
   try {
     const result = await db.query(
-      `SELECT id, question_text, question_type 
+      `SELECT id, question_text, question_type, COALESCE(expected_answer, '') AS expected_answer 
        FROM quiz_questions 
        WHERE quiz_id = $1 
        ORDER BY id ASC`,
@@ -2414,9 +2421,9 @@ async function evaluateSubmissionWithGemini(submissionId, customApiKey, customMo
   const rubric = (customRubric || sub.grading_rubric || '').trim() ||
     'Nilai ketepatan, kejelasan logika, dan kelengkapan konsep pada setiap jawaban essay mahasiswa. Berikan total nilai dalam skala 0 - 100 dan feedback singkat yang edukatif.';
 
-  // Ambil butir pertanyaan kuis
+  // Ambil butir pertanyaan kuis beserta kunci jawaban / expected_answer jika ada
   const qRes = await db.query(
-    `SELECT id, question_text, question_type 
+    `SELECT id, question_text, question_type, COALESCE(expected_answer, '') AS expected_answer 
      FROM quiz_questions 
      WHERE quiz_id = $1 
      ORDER BY id ASC`,
@@ -2441,7 +2448,8 @@ async function evaluateSubmissionWithGemini(submissionId, customApiKey, customMo
       answersObj[`Soal ${qNum}`] ||
       answersObj[Object.keys(answersObj)[idx]] ||
       '(Tidak dijawab)';
-    qaText += `\n--- SOAL #${qNum} ---\nPertanyaan: ${q.question_text}\nJawaban Mahasiswa: ${ans}\n`;
+    const expectedPart = q.expected_answer ? `Kunci Jawaban / Jawaban yang Diharapkan: ${q.expected_answer}\n` : '';
+    qaText += `\n--- SOAL #${qNum} ---\nPertanyaan: ${q.question_text}\n${expectedPart}Jawaban Mahasiswa: ${ans}\n`;
   });
 
   const promptText = `Anda adalah Dosen Penguji / Asisten Ahli Penilai Ujian Essay untuk mahasiswa Informatika.
@@ -2621,12 +2629,17 @@ app.post('/v1/admin/questions/import', authenticate, requireRole('SUPERADMIN', '
       await db.query('DELETE FROM quiz_questions WHERE quiz_id = $1', [cleanQuizId]);
     }
     for (const q of questions) {
-      const text = (q.question_text || q.question || '').trim();
+      const text = (q.question_text || q.questionText || q.question || '').trim();
       if (!text) continue;
+      const expectedAns = typeof q.expected_answer === 'string'
+        ? q.expected_answer.trim()
+        : typeof q.expectedAnswer === 'string'
+        ? q.expectedAnswer.trim()
+        : null;
       await db.query(
-        `INSERT INTO quiz_questions (quiz_id, question_text, question_type)
-         VALUES ($1, $2, $3)`,
-        [cleanQuizId, text, q.question_type || 'ESSAY']
+        `INSERT INTO quiz_questions (quiz_id, question_text, question_type, expected_answer)
+         VALUES ($1, $2, $3, $4)`,
+        [cleanQuizId, text, q.question_type || q.questionType || 'ESSAY', expectedAns]
       );
     }
     res.json({ status: 'success', message: `${questions.length} soal untuk Kuis #${cleanQuizId} berhasil disimpan!` });
@@ -2696,7 +2709,7 @@ function getCachedHtml() {
 <html lang="id">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, interactive-widget=resizes-content" />
   <title>Quiz Tracker Proctoring System (React.js)</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet" />
   <style>${cssContent}</style>

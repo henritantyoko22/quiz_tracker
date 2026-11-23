@@ -738,8 +738,8 @@ body {
 /* Exam Questions Container */
 .exam-container {
   max-width: 960px;
-  margin: 0 auto 60px auto;
-  padding: 0 16px;
+  margin: 0 auto;
+  padding: 0 16px 45vh 16px; /* Ruang lega di bagian bawah agar soal terbawah & tombol submit tidak pernah tertutup keyboard */
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -750,6 +750,8 @@ body {
   border: 1px solid #e2e8f0;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
   padding: 20px;
+  scroll-margin-top: 100px;
+  scroll-margin-bottom: 260px;
 }
 .question-card .q-header {
   display: flex;
@@ -785,6 +787,8 @@ body {
   outline: none;
   resize: vertical;
   transition: all 0.15s ease;
+  scroll-margin-top: 100px;
+  scroll-margin-bottom: 260px;
 }
 .essay-textarea:focus {
   border-color: #4f46e5;

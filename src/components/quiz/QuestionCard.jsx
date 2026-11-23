@@ -10,6 +10,16 @@ export const QuestionCard = memo(function QuestionCard({
 }) {
   const qNum = index + 1;
 
+  const handleFocus = (e) => {
+    onFocusQuestion(qNum);
+    // Beri jeda agar animasi keyboard virtual selesai, lalu gulir kotak jawaban ke tengah layar
+    setTimeout(() => {
+      if (e.target) {
+        e.target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }, 320);
+  };
+
   return (
     <div className="question-card">
       <div className="q-header">
@@ -23,7 +33,7 @@ export const QuestionCard = memo(function QuestionCard({
         className="essay-textarea"
         placeholder={`Ketik jawaban Anda untuk soal nomor ${qNum} di sini...`}
         value={value || ''}
-        onFocus={() => onFocusQuestion(qNum)}
+        onFocus={handleFocus}
         onChange={(e) => onChange(qNum, e.target.value)}
         onCopy={(e) => onBlockClipboard(e, 'Copy teks jawaban')}
         onPaste={(e) => onBlockClipboard(e, 'Paste teks ke kolom jawaban')}
