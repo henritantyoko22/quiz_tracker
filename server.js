@@ -2191,11 +2191,15 @@ app.post('/v1/admin/submissions/grade', authenticate, requireRole('SUPERADMIN', 
   }
 });
 
-// Batch Impor Nilai (Grading Import AI / CSV) - Hanya SUPERADMIN & DOSEN
+// Batch Impor Nilai (Grading Import AI / JSON / CSV) - Hanya SUPERADMIN & DOSEN
 app.post('/v1/admin/submissions/import-grades', authenticate, requireRole('SUPERADMIN', 'DOSEN'), async (req, res) => {
-  const { grades } = req.body;
+  let grades = req.body.grades || req.body.submissions || req.body.data || req.body.hasil_penilaian;
+  if (!grades && Array.isArray(req.body)) {
+    grades = req.body;
+  }
+
   if (!Array.isArray(grades) || grades.length === 0) {
-    return res.status(400).json({ status: 'error', message: 'Daftar nilai (grades) tidak boleh kosong.' });
+    return res.status(400).json({ status: 'error', message: 'Daftar nilai (grades/submissions) tidak boleh kosong.' });
   }
 
   let updatedCount = 0;
@@ -2203,11 +2207,13 @@ app.post('/v1/admin/submissions/import-grades', authenticate, requireRole('SUPER
   const errors = [];
 
   for (const item of grades) {
-    const rawNim = item.nim ? String(item.nim).trim() : '';
+    const rawNim = item.nim || item.userId || item.user_id ? String(item.nim || item.userId || item.user_id).trim() : '';
     const rawQuizId = item.quizId || item.quiz_id ? String(item.quizId || item.quiz_id).trim() : '';
     const submissionId = item.submissionId || item.submission_id || item.id;
-    const rawGrade = item.grade ?? item.nilai;
-    const feedback = item.feedback !== undefined && item.feedback !== null ? String(item.feedback) : (item.catatan || item.catatan_dosen || '');
+    const rawGrade = item.grade !== undefined && item.grade !== null ? item.grade : (item.nilai !== undefined && item.nilai !== null ? item.nilai : item.score !== undefined ? item.score : item.skor);
+    const feedback = item.feedback !== undefined && item.feedback !== null 
+      ? String(item.feedback) 
+      : (item.catatan_feedback_dosen || item.catatan || item.catatan_dosen || item.komentar || '');
 
     if (rawGrade === undefined || rawGrade === null || rawGrade === '') {
       skippedCount++;

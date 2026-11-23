@@ -1150,9 +1150,9 @@ export function AdminDashboardPage() {
                       type="button"
                       className="btn btn-warning btn-sm btn-touchable"
                       onClick={() => setImportModalOpen(true)}
-                      title="Impor nilai & feedback AI dari file CSV"
+                      title="Impor nilai & feedback AI dari file JSON atau CSV"
                     >
-                      📤 Import Nilai
+                      📤 Import Nilai (JSON/CSV)
                     </button>
                   )}
 

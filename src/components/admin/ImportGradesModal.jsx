@@ -2,25 +2,187 @@ import React, { useState, useRef } from 'react';
 import { API_BASE, getAuthHeaders } from '../../services/api.js';
 
 /**
- * Robust CSV parser yang mendukung RFC 4180:
- * - Menangani kutipan ("..."), koma di dalam tanda kutip, dan baris baru di dalam tanda kutip
- * - Otomatis mendeteksi pemisah koma (,) atau titik-koma (;)
- * - Menghilangkan UTF-8 BOM
+ * Universal JSON parser untuk format nilai submission AI:
+ * - Mendukung format file ekspor (obj.submissions)
+ * - Mendukung format array [ { nim, nilai, feedback, quiz_id }, ... ]
+ * - Mendukung wrapper object { grades: [...], data: [...], hasil_penilaian: [...] }
+ * - Mendukung format dictionary key-value { "NIM": { nilai, feedback } }
+ */
+export function parseJSONToGrades(jsonInput) {
+  if (!jsonInput) return [];
+
+  let data;
+  if (typeof jsonInput === 'string') {
+    let cleaned = jsonInput.replace(/^\uFEFF/, '').trim();
+    if (!cleaned) return [];
+
+    // Jika user meng-copy deretan objek yang berakhiran koma tanpa tanda kurung siku [ ... ]
+    // Contoh: { ... },\n{ ... }
+    if (!cleaned.startsWith('[') && cleaned.startsWith('{') && (cleaned.endsWith('}') || cleaned.endsWith(','))) {
+      const trimmedEnd = cleaned.replace(/,\s*$/, '');
+      try {
+        data = JSON.parse('[' + trimmedEnd + ']');
+      } catch (_) {}
+    }
+
+    if (!data) {
+      try {
+        data = JSON.parse(cleaned);
+      } catch (err) {
+        // Coba bersihkan trailing comma sebelum bracket/brace penutup
+        try {
+          const withoutTrailing = cleaned.replace(/,\s*([\]}])/g, '$1').replace(/,\s*$/, '');
+          data = JSON.parse(withoutTrailing);
+        } catch (_) {
+          throw new Error('Format JSON tidak valid: ' + err.message);
+        }
+      }
+    }
+  } else {
+    data = jsonInput;
+  }
+
+  let itemsArray = [];
+  let defaultQuizId = '';
+
+  if (Array.isArray(data)) {
+    itemsArray = data;
+  } else if (data && typeof data === 'object') {
+    // 1. Cek apakah ini satu objek mahasiswa tunggal: { nim: '...', nilai: 96 }
+    if (data.nim || data.NIM || data.userId || data.user_id) {
+      itemsArray = [data];
+    } else {
+      if (data.meta && data.meta.quiz_id) {
+        defaultQuizId = String(data.meta.quiz_id);
+      }
+
+      if (Array.isArray(data.submissions)) {
+        itemsArray = data.submissions;
+      } else if (Array.isArray(data.grades)) {
+        itemsArray = data.grades;
+      } else if (Array.isArray(data.data)) {
+        itemsArray = data.data;
+      } else if (Array.isArray(data.hasil_penilaian)) {
+        itemsArray = data.hasil_penilaian;
+      } else if (Array.isArray(data.students)) {
+        itemsArray = data.students;
+      } else if (Array.isArray(data.mahasiswa)) {
+        itemsArray = data.mahasiswa;
+      } else {
+        // Cek apakah berupa dictionary dengan key NIM: { "240601...": { nilai: 85, feedback: "..." } }
+        const keys = Object.keys(data);
+        if (keys.length > 0 && keys.some((k) => /^\d{8,}/.test(k) || k.toLowerCase().includes('nim'))) {
+          itemsArray = keys.map((key) => {
+            const val = data[key];
+            if (typeof val === 'object' && val !== null) {
+              return { nim: key, ...val };
+            }
+            return { nim: key, nilai: val };
+          });
+        }
+      }
+    }
+  }
+
+  if (itemsArray.length === 0) {
+    throw new Error(
+      'Tidak ditemukan data mahasiswa/nilai pada JSON. Pastikan berupa Array atau Object dengan properti "submissions" atau "grades".'
+    );
+  }
+
+  const parsedItems = [];
+
+  itemsArray.forEach((item, idx) => {
+    if (!item || typeof item !== 'object') return;
+
+    const rawNim = String(
+      item.nim || item.NIM || item.userId || item.user_id || item.student_id || ''
+    ).trim();
+
+    const rawName = String(
+      item.nama || item.name || item.studentName || item.student_name || '-'
+    ).trim();
+
+    const rawQuizId = String(
+      item.quiz_id || item.quizId || item.quiz || defaultQuizId || ''
+    ).trim();
+
+    const rawAttempt = item.attempt ? parseInt(item.attempt, 10) || 1 : 1;
+
+    // Nilai (grade / nilai / score / skor)
+    const rawGrade =
+      item.nilai !== undefined && item.nilai !== null
+        ? item.nilai
+        : item.grade !== undefined && item.grade !== null
+        ? item.grade
+        : item.score !== undefined && item.score !== null
+        ? item.score
+        : item.skor;
+
+    // Feedback (catatan / feedback)
+    const rawFeedback = String(
+      item.catatan_feedback_dosen ||
+        item.feedback ||
+        item.catatan ||
+        item.catatan_dosen ||
+        item.komentar ||
+        item.evaluasi ||
+        ''
+    ).trim();
+
+    let status = 'VALID';
+    let errorMessage = '';
+
+    if (!rawNim) {
+      status = 'ERROR';
+      errorMessage = 'NIM tidak ditemukan pada baris data ini.';
+    } else if (rawGrade === undefined || rawGrade === null || rawGrade === '') {
+      status = 'EMPTY';
+      errorMessage = 'Nilai belum diisi.';
+    } else {
+      const numGrade = parseFloat(rawGrade);
+      if (isNaN(numGrade) || numGrade < 0 || numGrade > 100) {
+        status = 'ERROR';
+        errorMessage = `Nilai '${rawGrade}' tidak valid (harus 0 - 100).`;
+      }
+    }
+
+    parsedItems.push({
+      nim: rawNim,
+      nama: rawName,
+      quizId: rawQuizId,
+      attempt: rawAttempt,
+      grade:
+        rawGrade !== undefined &&
+        rawGrade !== null &&
+        rawGrade !== '' &&
+        !isNaN(parseFloat(rawGrade))
+          ? Math.round(parseFloat(rawGrade))
+          : null,
+      feedback: rawFeedback,
+      status,
+      errorMessage,
+      rawRowIndex: idx + 1,
+    });
+  });
+
+  return parsedItems;
+}
+
+/**
+ * Robust CSV parser yang mendukung RFC 4180
  */
 export function parseCSVToGrades(csvText) {
   if (!csvText) return [];
 
-  // Bersihkan UTF-8 BOM jika ada
   let text = csvText.replace(/^\uFEFF/, '').trim();
   if (!text) return [];
 
-  // Deteksi pemisah (koma atau titik koma) dari baris pertama
   const firstLine = text.split(/\r\n|\n|\r/)[0] || '';
   const commaCount = (firstLine.match(/,/g) || []).length;
   const semicolonCount = (firstLine.match(/;/g) || []).length;
   const delimiter = semicolonCount > commaCount ? ';' : ',';
 
-  // State machine parser untuk membaca tokens dengan benar
   const rows = [];
   let currentRow = [];
   let currentField = '';
@@ -33,7 +195,7 @@ export function parseCSVToGrades(csvText) {
     if (char === '"') {
       if (insideQuotes && nextChar === '"') {
         currentField += '"';
-        i++; // lewati quote ganda
+        i++;
       } else {
         insideQuotes = !insideQuotes;
       }
@@ -42,7 +204,7 @@ export function parseCSVToGrades(csvText) {
       currentField = '';
     } else if ((char === '\r' || char === '\n') && !insideQuotes) {
       if (char === '\r' && nextChar === '\n') {
-        i++; // lewati \n pada format CRLF
+        i++;
       }
       currentRow.push(currentField.trim());
       currentField = '';
@@ -66,7 +228,6 @@ export function parseCSVToGrades(csvText) {
 
   const rawHeaders = rows[0].map((h) => h.toLowerCase().trim());
 
-  // Helper pencari index kolom
   const findIndex = (patterns) => {
     return rawHeaders.findIndex((h) =>
       patterns.some((p) => (typeof p === 'string' ? h === p : p.test(h)))
@@ -110,7 +271,7 @@ export function parseCSVToGrades(csvText) {
     const rawGrade = gradeIdx !== -1 && row[gradeIdx] !== undefined ? row[gradeIdx].replace(/["']/g, '').trim() : '';
     const rawFeedback = feedbackIdx !== -1 && row[feedbackIdx] !== undefined ? row[feedbackIdx].trim() : '';
 
-    if (!rawNim && !rawName) continue; // Abaikan baris kosong
+    if (!rawNim && !rawName) continue;
 
     let status = 'VALID';
     let errorMessage = '';
@@ -146,14 +307,35 @@ export function parseCSVToGrades(csvText) {
 }
 
 export function ImportGradesModal({ isOpen, onClose, token, onSuccess, showToast }) {
+  const [inputMode, setInputMode] = useState('FILE'); // 'FILE' | 'PASTE'
   const [file, setFile] = useState(null);
+  const [pasteText, setPasteText] = useState('');
   const [parsedRows, setParsedRows] = useState([]);
   const [isParsing, setIsParsing] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [filterTab, setFilterTab] = useState('ALL'); // 'ALL' | 'VALID' | 'WARNING'
+  const [showExample, setShowExample] = useState(false);
   const fileInputRef = useRef(null);
 
   if (!isOpen) return null;
+
+  const detectAndParse = (text, fileName = '') => {
+    const trimmed = (text || '').trim();
+    if (!trimmed) {
+      throw new Error('Data teks atau file kosong.');
+    }
+
+    // Jika file berakhiran .json atau diawali kurung kurawal/siku, parse sebagai JSON
+    const isJson =
+      fileName.toLowerCase().endsWith('.json') ||
+      trimmed.startsWith('{') ||
+      trimmed.startsWith('[');
+
+    if (isJson) {
+      return parseJSONToGrades(trimmed);
+    }
+    return parseCSVToGrades(trimmed);
+  };
 
   const handleFileChange = (e) => {
     const selected = e.target.files?.[0];
@@ -169,13 +351,16 @@ export function ImportGradesModal({ isOpen, onClose, token, onSuccess, showToast
     reader.onload = (event) => {
       try {
         const text = event.target?.result || '';
-        const rows = parseCSVToGrades(text);
+        const rows = detectAndParse(text, selectedFile.name);
         setParsedRows(rows);
         if (rows.length === 0) {
-          showToast('File CSV tidak memiliki baris data atau format kolom NIM tidak cocok.', 'error');
+          showToast('Data tidak memiliki baris nilai yang sesuai format.', 'error');
+        } else {
+          showToast(`Berhasil membaca ${rows.length} baris data dari ${selectedFile.name}`, 'info');
         }
       } catch (err) {
-        showToast('Gagal memproses file CSV: ' + err.message, 'error');
+        showToast('Gagal memproses file: ' + err.message, 'error');
+        setParsedRows([]);
       } finally {
         setIsParsing(false);
       }
@@ -185,6 +370,28 @@ export function ImportGradesModal({ isOpen, onClose, token, onSuccess, showToast
       setIsParsing(false);
     };
     reader.readAsText(selectedFile, 'UTF-8');
+  };
+
+  const processPastedText = () => {
+    if (!pasteText.trim()) {
+      showToast('Masukkan atau paste teks JSON / CSV terlebih dahulu!', 'error');
+      return;
+    }
+    setIsParsing(true);
+    try {
+      const rows = detectAndParse(pasteText);
+      setParsedRows(rows);
+      if (rows.length === 0) {
+        showToast('Tidak ditemukan data nilai mahasiswa dari teks yang dimasukkan.', 'error');
+      } else {
+        showToast(`Berhasil membaca ${rows.length} data mahasiswa dari teks!`, 'info');
+      }
+    } catch (err) {
+      showToast('Gagal membaca teks: ' + err.message, 'error');
+      setParsedRows([]);
+    } finally {
+      setIsParsing(false);
+    }
   };
 
   const validRows = parsedRows.filter((r) => r.status === 'VALID');
@@ -199,6 +406,7 @@ export function ImportGradesModal({ isOpen, onClose, token, onSuccess, showToast
 
   const handleReset = () => {
     setFile(null);
+    setPasteText('');
     setParsedRows([]);
     setFilterTab('ALL');
     if (fileInputRef.current) fileInputRef.current.value = '';
@@ -246,21 +454,36 @@ export function ImportGradesModal({ isOpen, onClose, token, onSuccess, showToast
     }
   };
 
+  const exampleJSON = `[
+  {
+    "nim": "24060122130001",
+    "quiz_id": "iot-01",
+    "nilai": 88,
+    "feedback": "Penjelasan konsep sensor analog vs digital sangat jelas dan tepat."
+  },
+  {
+    "nim": "24060122130002",
+    "quiz_id": "iot-01",
+    "nilai": 75,
+    "feedback": "Konsep dasar sudah baik, perlu diperbaiki contoh penerapannya."
+  }
+]`;
+
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div
         className="modal-card"
-        style={{ maxWidth: 900, width: '95%', maxHeight: '90vh', display: 'flex', flexDirection: 'column' }}
+        style={{ maxWidth: 940, width: '95%', maxHeight: '92vh', display: 'flex', flexDirection: 'column' }}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Modal Header */}
         <div className="modal-header">
           <div>
             <h3 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span>📥</span> Impor Nilai & Feedback AI (CSV)
+              <span>📥</span> Impor Nilai & Feedback AI (JSON / CSV)
             </h3>
             <p style={{ margin: '4px 0 0 0', fontSize: '0.82rem', color: '#64748b' }}>
-              Unggah file CSV hasil analisis / penilaian jawaban essay oleh AI untuk disimpan otomatis ke database.
+              Masukkan hasil penilaian & feedback dari AI (Gemini / ChatGPT / Claude) untuk otomatis memperbarui database.
             </p>
           </div>
           <button
@@ -278,68 +501,138 @@ export function ImportGradesModal({ isOpen, onClose, token, onSuccess, showToast
           {/* Instruksi Singkat Alur AI */}
           <div
             style={{
-              background: '#eff6ff',
-              border: '1px solid #bfdbfe',
+              background: '#f0fdf4',
+              border: '1px solid #bbf7d0',
               borderRadius: 10,
               padding: '12px 16px',
               fontSize: '0.82rem',
-              color: '#1e40af',
+              color: '#166534',
               marginBottom: 16,
               lineHeight: 1.5,
             }}
           >
-            <strong>💡 Alur Penilaian Berbasis AI:</strong>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <strong>💡 Alur Penilaian Nilai Berbasis AI (JSON & CSV):</strong>
+              <button
+                type="button"
+                onClick={() => setShowExample(!showExample)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: '#15803d',
+                  fontSize: '0.78rem',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  textDecoration: 'underline',
+                }}
+              >
+                {showExample ? 'Sembunyikan Contoh Format' : 'Lihat Contoh Format JSON'}
+              </button>
+            </div>
             <ol style={{ margin: '6px 0 0 18px', padding: 0 }}>
               <li>
-                Ekspor data jawaban mahasiswa dengan tombol <strong>📥 Export CSV</strong> di Dashboard.
+                Ekspor data jawaban dengan tombol <strong>🤖 Export JSON (AI)</strong> atau <strong>📥 Export CSV</strong>.
               </li>
               <li>
-                Beri instruksi ke AI (ChatGPT / Claude / Gemini) beserta rubrik penilaian untuk mengisi kolom{' '}
-                <code>Nilai (0-100)</code> dan <code>Catatan / Feedback Dosen</code> pada file CSV tersebut.
+                Minta AI (ChatGPT/Gemini) mengevaluasi jawaban dan menghasilkan nilai <code>nilai</code> (0-100) serta <code>feedback</code>.
               </li>
               <li>
-                Unggah kembali file CSV hasil penilaian AI tersebut di bawah ini untuk disimpan otomatis.
+                Unggah file hasil AI tersebut atau langsung <em>paste</em> teks JSON jawabannya di bawah ini.
               </li>
             </ol>
+
+            {showExample && (
+              <div style={{ marginTop: 10, background: '#ffffff', borderRadius: 8, padding: 12, border: '1px solid #86efac' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                  <span style={{ fontWeight: 700, fontSize: '0.78rem', color: '#166534' }}>
+                    Contoh Format JSON Sederhana:
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard.writeText(exampleJSON);
+                      showToast('Contoh format JSON berhasil disalin!', 'success');
+                    }}
+                    style={{
+                      background: '#dcfce7',
+                      border: '1px solid #86efac',
+                      borderRadius: 4,
+                      padding: '2px 8px',
+                      fontSize: '0.72rem',
+                      fontWeight: 700,
+                      color: '#15803d',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    📋 Salin Contoh
+                  </button>
+                </div>
+                <pre style={{ margin: 0, fontSize: '0.75rem', fontFamily: 'monospace', color: '#1e293b' }}>
+                  {exampleJSON}
+                </pre>
+                <div style={{ fontSize: '0.73rem', color: '#475569', marginTop: 6 }}>
+                  *File JSON hasil ekspor lengkap (dengan metadata & pertanyaan) juga langsung didukung secara otomatis.
+                </div>
+              </div>
+            )}
           </div>
 
-          {/* Area Pilih File */}
-          {!file ? (
-            <div
-              style={{
-                border: '2px dashed #cbd5e1',
-                borderRadius: 12,
-                padding: '32px 20px',
-                textAlign: 'center',
-                background: '#f8fafc',
-                cursor: 'pointer',
-                transition: 'all 0.2s',
-              }}
-              onClick={() => fileInputRef.current?.click()}
-              onDragOver={(e) => e.preventDefault()}
-              onDrop={(e) => {
-                e.preventDefault();
-                if (e.dataTransfer.files?.[0]) processFile(e.dataTransfer.files[0]);
-              }}
+          {/* Tab Selector: Upload File vs Paste Text */}
+          <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+            <button
+              type="button"
+              className={`btn btn-sm ${inputMode === 'FILE' ? 'btn-primary' : 'btn-outline'}`}
+              onClick={() => setInputMode('FILE')}
+              style={{ fontWeight: 700, fontSize: '0.82rem' }}
             >
-              <input
-                type="file"
-                ref={fileInputRef}
-                accept=".csv"
-                style={{ display: 'none' }}
-                onChange={handleFileChange}
-              />
-              <div style={{ fontSize: '2.4rem', marginBottom: 8 }}>📁</div>
-              <div style={{ fontWeight: 700, fontSize: '0.98rem', color: '#1e293b', marginBottom: 4 }}>
-                Klik atau Tarik File CSV ke Sini
+              📁 Unggah File (.json / .csv)
+            </button>
+            <button
+              type="button"
+              className={`btn btn-sm ${inputMode === 'PASTE' ? 'btn-primary' : 'btn-outline'}`}
+              onClick={() => setInputMode('PASTE')}
+              style={{ fontWeight: 700, fontSize: '0.82rem' }}
+            >
+              📋 Paste Teks JSON / CSV
+            </button>
+          </div>
+
+          {/* Area Input Sesuai Mode */}
+          {inputMode === 'FILE' ? (
+            !file ? (
+              <div
+                style={{
+                  border: '2px dashed #cbd5e1',
+                  borderRadius: 12,
+                  padding: '32px 20px',
+                  textAlign: 'center',
+                  background: '#f8fafc',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s',
+                }}
+                onClick={() => fileInputRef.current?.click()}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  if (e.dataTransfer.files?.[0]) processFile(e.dataTransfer.files[0]);
+                }}
+              >
+                <input
+                  type="file"
+                  ref={fileInputRef}
+                  accept=".json,.csv"
+                  style={{ display: 'none' }}
+                  onChange={handleFileChange}
+                />
+                <div style={{ fontSize: '2.4rem', marginBottom: 8 }}>📥</div>
+                <div style={{ fontWeight: 700, fontSize: '0.98rem', color: '#1e293b', marginBottom: 4 }}>
+                  Klik atau Tarik File JSON / CSV ke Sini
+                </div>
+                <div style={{ fontSize: '0.8rem', color: '#64748b' }}>
+                  Mendukung format file <strong>.json</strong> (Rekap AI) atau <strong>.csv</strong>.
+                </div>
               </div>
-              <div style={{ fontSize: '0.8rem', color: '#64748b' }}>
-                Mendukung format file CSV (Comma atau Semicolon delimited).
-              </div>
-            </div>
-          ) : (
-            <div>
-              {/* File Info Bar */}
+            ) : (
               <div
                 style={{
                   display: 'flex',
@@ -369,13 +662,61 @@ export function ImportGradesModal({ isOpen, onClose, token, onSuccess, showToast
                   Ganti File
                 </button>
               </div>
+            )
+          ) : (
+            <div style={{ marginBottom: 14 }}>
+              <textarea
+                rows={6}
+                placeholder="Paste teks JSON atau CSV hasil penilaian AI di sini..."
+                value={pasteText}
+                onChange={(e) => setPasteText(e.target.value)}
+                style={{
+                  width: '100%',
+                  boxSizing: 'border-box',
+                  fontFamily: 'monospace',
+                  fontSize: '0.82rem',
+                  padding: '10px 12px',
+                  borderRadius: 8,
+                  border: '1px solid #cbd5e1',
+                  background: '#ffffff',
+                }}
+              />
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 8 }}>
+                {pasteText && (
+                  <button
+                    type="button"
+                    className="btn btn-outline btn-sm"
+                    onClick={() => {
+                      setPasteText('');
+                      setParsedRows([]);
+                    }}
+                    style={{ fontSize: '0.78rem' }}
+                  >
+                    Bersihkan Teks
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm btn-touchable"
+                  onClick={processPastedText}
+                  disabled={!pasteText.trim() || isParsing}
+                  style={{ fontWeight: 700 }}
+                >
+                  {isParsing ? '⏳ Memproses...' : '⚡ Proses & Pratinjau Nilai'}
+                </button>
+              </div>
+            </div>
+          )}
 
+          {/* Area Preview Data jika sudah diparsing */}
+          {parsedRows.length > 0 && (
+            <div style={{ marginTop: 14 }}>
               {/* Status Ringkasan Bar */}
               <div
                 style={{
                   display: 'flex',
                   gap: 10,
-                  marginBottom: 14,
+                  marginBottom: 12,
                   alignItems: 'center',
                   flexWrap: 'wrap',
                 }}
@@ -478,7 +819,7 @@ export function ImportGradesModal({ isOpen, onClose, token, onSuccess, showToast
                           <td
                             style={{
                               padding: '8px 10px',
-                              maxWidth: 220,
+                              maxWidth: 240,
                               overflow: 'hidden',
                               textOverflow: 'ellipsis',
                               whiteSpace: 'nowrap',
@@ -526,7 +867,7 @@ export function ImportGradesModal({ isOpen, onClose, token, onSuccess, showToast
           }}
         >
           <div style={{ fontSize: '0.8rem', color: '#64748b' }}>
-            {file && (
+            {parsedRows.length > 0 && (
               <span>
                 Total <strong>{validRows.length}</strong> nilai valid dari {parsedRows.length} baris data.
               </span>
@@ -545,7 +886,7 @@ export function ImportGradesModal({ isOpen, onClose, token, onSuccess, showToast
               type="button"
               className="btn btn-primary btn-touchable"
               onClick={handleImportSubmit}
-              disabled={!file || validRows.length === 0 || isSubmitting || isParsing}
+              disabled={validRows.length === 0 || isSubmitting || isParsing}
               style={{ fontWeight: 700 }}
             >
               {isSubmitting
@@ -558,4 +899,3 @@ export function ImportGradesModal({ isOpen, onClose, token, onSuccess, showToast
     </div>
   );
 }
-
