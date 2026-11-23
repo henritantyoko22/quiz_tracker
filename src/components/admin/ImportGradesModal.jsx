@@ -313,6 +313,7 @@ export function ImportGradesModal({ isOpen, onClose, token, onSuccess, showToast
   const [parsedRows, setParsedRows] = useState([]);
   const [isParsing, setIsParsing] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [importProgress, setImportProgress] = useState('');
   const [filterTab, setFilterTab] = useState('ALL'); // 'ALL' | 'VALID' | 'WARNING'
   const [showExample, setShowExample] = useState(false);
   const fileInputRef = useRef(null);
@@ -419,38 +420,58 @@ export function ImportGradesModal({ isOpen, onClose, token, onSuccess, showToast
     }
 
     setIsSubmitting(true);
+    setImportProgress('Memulai penyimpanan nilai...');
+
+    const CHUNK_SIZE = 25; // Potong 25 mahasiswa per batch agar ukuran request selalu kecil (<50KB) dan terhindar dari Payload Too Large
+    const total = validRows.length;
+    let totalUpdated = 0;
+    let anyError = null;
+
     try {
-      const payload = {
-        grades: validRows.map((r) => ({
-          nim: r.nim,
-          quizId: r.quizId,
-          attempt: r.attempt,
-          grade: r.grade,
-          feedback: r.feedback,
-        })),
-      };
+      for (let i = 0; i < total; i += CHUNK_SIZE) {
+        const chunk = validRows.slice(i, i + CHUNK_SIZE);
+        const currentEnd = Math.min(i + CHUNK_SIZE, total);
+        setImportProgress(`Menyimpan ${i + 1} - ${currentEnd} dari ${total} nilai...`);
 
-      const res = await fetch(`${API_BASE}/v1/admin/submissions/import-grades`, {
-        method: 'POST',
-        headers: getAuthHeaders(token),
-        body: JSON.stringify(payload),
-      });
+        const payload = {
+          grades: chunk.map((r) => ({
+            nim: r.nim,
+            quizId: r.quizId,
+            attempt: r.attempt,
+            grade: r.grade,
+            feedback: r.feedback,
+          })),
+        };
 
-      const data = await res.json();
-      if (res.ok && data.status === 'success') {
+        const res = await fetch(`${API_BASE}/v1/admin/submissions/import-grades`, {
+          method: 'POST',
+          headers: getAuthHeaders(token),
+          body: JSON.stringify(payload),
+        });
+
+        const data = await res.json();
+        if (res.ok && data.status === 'success') {
+          totalUpdated += data.updatedCount || 0;
+        } else {
+          anyError = data.message || 'Gagal menyimpan sebagian nilai mahasiswa.';
+        }
+      }
+
+      if (totalUpdated > 0) {
         showToast(
-          `✅ Sukses! ${data.updatedCount} nilai mahasiswa berhasil disimpan ke database.`,
+          `✅ Sukses! ${totalUpdated} dari ${total} nilai mahasiswa berhasil disimpan ke database.`,
           'success'
         );
         if (onSuccess) onSuccess();
         onClose();
-      } else {
-        showToast(data.message || 'Gagal menyimpan nilai mahasiswa.', 'error');
+      } else if (anyError) {
+        showToast(anyError, 'error');
       }
     } catch (err) {
       showToast('Terjadi kesalahan koneksi: ' + err.message, 'error');
     } finally {
       setIsSubmitting(false);
+      setImportProgress('');
     }
   };
 
@@ -890,7 +911,7 @@ export function ImportGradesModal({ isOpen, onClose, token, onSuccess, showToast
               style={{ fontWeight: 700 }}
             >
               {isSubmitting
-                ? '⏳ Menyimpan Nilai...'
+                ? importProgress ? `⏳ ${importProgress}` : '⏳ Menyimpan Nilai...'
                 : `🚀 Simpan & Terapkan (${validRows.length} Nilai)`}
             </button>
           </div>
