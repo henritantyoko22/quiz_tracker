@@ -270,6 +270,43 @@ function checkFakeGpsAnomaly({ locationLat, locationLng, locationAccuracy, isMoc
   return { isFake: false };
 }
 
+// ---------------------------------------------------------------
+// VALIDASI & TELEMETRI BROWSER (KHUSUS GOOGLE CHROME & SAFARI)
+// ---------------------------------------------------------------
+function detectClientBrowser(ua = '') {
+  if (!ua || typeof ua !== 'string') return { allowed: false, name: 'Unknown Browser' };
+
+  // Browser turunan / non-standar yang sering memodifikasi atau bypass API proteksi
+  const isExcluded = /SamsungBrowser|Edg|OPR|Opera|UCBrowser|UBrowser|Firefox|FxiOS|MiuiBrowser|VivoBrowser|HeyTapBrowser|DuckDuckGo|Instagram|FBAN|FBAV|Line|MicroMessenger|wv|WebView/i.test(ua);
+  if (isExcluded) {
+    let name = 'Other Browser';
+    if (/SamsungBrowser/i.test(ua)) name = 'Samsung Internet';
+    else if (/Edg/i.test(ua)) name = 'Microsoft Edge';
+    else if (/OPR|Opera/i.test(ua)) name = 'Opera';
+    else if (/UCBrowser|UBrowser/i.test(ua)) name = 'UC Browser';
+    else if (/Firefox|FxiOS/i.test(ua)) name = 'Firefox';
+    else if (/MiuiBrowser/i.test(ua)) name = 'Mi Browser';
+    else if (/Instagram|FBAN|FBAV|Line|MicroMessenger/i.test(ua)) name = 'In-App WebView';
+    return { allowed: false, name };
+  }
+
+  // Google Chrome (Desktop, Android, atau iOS CriOS)
+  const isChrome = /Chrome|CriOS/i.test(ua);
+  if (isChrome) {
+    const isMobile = /Android|iPhone|iPad/i.test(ua);
+    return { allowed: true, name: isMobile ? 'Chrome Mobile' : 'Chrome Desktop' };
+  }
+
+  // Apple Safari (macOS atau iOS Safari)
+  const isSafari = /Safari/i.test(ua) && /Version\/(\d+)/i.test(ua);
+  if (isSafari) {
+    const isMobile = /iPhone|iPad/i.test(ua);
+    return { allowed: true, name: isMobile ? 'Safari iOS' : 'Safari Desktop' };
+  }
+
+  return { allowed: false, name: 'Unknown Browser' };
+}
+
 // Mitigasi DoS / OOM: Batasi kapasitas map in-memory
 function enforceLiveSessionsLimit() {
   if (liveStudentSessions.size < MAX_LIVE_SESSIONS) return;
@@ -483,6 +520,14 @@ async function initDbTables() {
     await db.query(`
       ALTER TABLE quiz_submissions 
       ADD COLUMN IF NOT EXISTS client_ip VARCHAR(50);
+    `);
+    await db.query(`
+      ALTER TABLE quiz_submissions 
+      ADD COLUMN IF NOT EXISTS browser_info VARCHAR(100);
+    `);
+    await db.query(`
+      ALTER TABLE quiz_submissions 
+      ADD COLUMN IF NOT EXISTS device_info VARCHAR(100);
     `);
 
     // Kolom Mata Kuliah pada quiz_settings dan quiz_students
@@ -1149,6 +1194,11 @@ app.post('/v1/quiz/submit', async (req, res) => {
     const actLogJson = safeActLog ? JSON.stringify(safeActLog) : null;
     const attemptNum = parseInt(attempt) > 0 ? parseInt(attempt) : 1;
 
+    const uaHeader = req.headers['user-agent'] || req.body.browserInfo || '';
+    const browserCheck = detectClientBrowser(uaHeader);
+    const finalBrowserInfo = req.body.browserInfo || browserCheck.name;
+    const finalDeviceInfo = req.body.deviceInfo || (/Mobile|Android|iPhone|iPad/i.test(uaHeader) ? 'Mobile' : 'Desktop');
+
     let insertedId = null;
     try {
       const insRes = await db.query(
@@ -1156,9 +1206,10 @@ app.post('/v1/quiz/submit', async (req, res) => {
            user_id, nim, quiz_id, answers, status, violation_count, max_violations,
            question_timings, activity_log, duration_seconds, attempt, kelas,
            location_lat, location_lng, location_distance_meters, location_accuracy_meters, location_status, client_ip,
+           browser_info, device_info,
            submitted_at
          )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, NOW())
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, NOW())
          RETURNING id`,
         [
           userId, cleanNim, cleanQuizId, JSON.stringify(answers || {}), finalStatus,
@@ -1168,7 +1219,9 @@ app.post('/v1/quiz/submit', async (req, res) => {
           verifiedDistance,
           locationAccuracy ? Math.round(Number(locationAccuracy)) : null,
           finalLocationStatus,
-          clientIp
+          clientIp,
+          finalBrowserInfo,
+          finalDeviceInfo
         ]
       );
       insertedId = insRes.rows[0]?.id;
@@ -1324,6 +1377,15 @@ app.post('/v1/quiz/live/session', async (req, res) => {
       targetLng: Number(setRes.rows[0]?.target_lng) || DEFAULT_FSM_LNG
     });
 
+    const ua = req.headers['user-agent'] || req.body.browserInfo || '';
+    const browserCheck = detectClientBrowser(ua);
+    if (!browserCheck.allowed) {
+      return res.status(403).json({
+        status: 'error',
+        message: `Ujian ini hanya dapat dikerjakan menggunakan browser resmi Google Chrome atau Safari (Browser terdeteksi: ${browserCheck.name}). Silakan buka link ujian di Google Chrome atau Safari.`
+      });
+    }
+
     const initialLocationStatus = antiSpoof.isFake ? 'FAKE_GPS_SPOOF' : (locationStatus || 'NOT_RECORDED');
     const liveCourse = setRes.rows[0]?.mata_kuliah || (iotNimsSet.has(cleanNim) ? 'IoT' : 'PPK');
 
@@ -1335,6 +1397,8 @@ app.post('/v1/quiz/live/session', async (req, res) => {
       mataKuliah: liveCourse,
       kelas: studentKelas,
       attempt: Number(attempt) || 1,
+      browserInfo: browserCheck.name,
+      deviceInfo: /Mobile|Android|iPhone|iPad/i.test(ua) ? 'Mobile' : 'Desktop',
       totalQuestions: totalQuestions || safeQTexts.length || 0,
       questionTexts: safeQTexts,
       startedAt: now,
@@ -2089,7 +2153,9 @@ app.get('/v1/admin/submissions', authenticate, async (req, res) => {
         s.location_distance_meters,
         s.location_accuracy_meters,
         s.location_status,
-        s.client_ip
+        s.client_ip,
+        COALESCE(s.browser_info, 'Chrome') AS browser_info,
+        COALESCE(s.device_info, 'Mobile') AS device_info
       FROM quiz_submissions s
       LEFT JOIN quiz_settings qs ON qs.quiz_id = s.quiz_id
       LEFT JOIN quiz_students stu ON stu.nim = s.nim

@@ -84,6 +84,9 @@ export function StudentQuizPage() {
     distance: null,
     status: 'NOT_RECORDED',
   });
+  const [splitScreenActive, setSplitScreenActive] = useState(false);
+  const blurTimeoutRef = useRef(null);
+  const lastSplitWarnMsRef = useRef(0);
   const identityRef = useRef({
     name: '',
     nim: '',
@@ -312,6 +315,38 @@ export function StudentQuizPage() {
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 
     return Math.round(R * c);
+  };
+
+  // Helper Deteksi Browser Resmi (Google Chrome & Apple Safari)
+  const detectAllowedBrowser = (ua = '') => {
+    if (!ua) return { allowed: false, name: 'Unknown' };
+
+    const isExcluded = /SamsungBrowser|Edg|OPR|Opera|UCBrowser|UBrowser|Firefox|FxiOS|MiuiBrowser|VivoBrowser|HeyTapBrowser|DuckDuckGo|Instagram|FBAN|FBAV|Line|MicroMessenger|wv|WebView/i.test(ua);
+    if (isExcluded) {
+      let name = 'Other Browser';
+      if (/SamsungBrowser/i.test(ua)) name = 'Samsung Internet';
+      else if (/Edg/i.test(ua)) name = 'Microsoft Edge';
+      else if (/OPR|Opera/i.test(ua)) name = 'Opera';
+      else if (/UCBrowser|UBrowser/i.test(ua)) name = 'UC Browser';
+      else if (/Firefox|FxiOS/i.test(ua)) name = 'Firefox';
+      else if (/MiuiBrowser/i.test(ua)) name = 'Mi Browser';
+      else if (/Instagram|FBAN|FBAV|Line|MicroMessenger/i.test(ua)) name = 'In-App WebView';
+      return { allowed: false, name };
+    }
+
+    const isChrome = /Chrome|CriOS/i.test(ua);
+    if (isChrome) {
+      const isMobile = /Android|iPhone|iPad/i.test(ua);
+      return { allowed: true, name: isMobile ? 'Chrome Mobile' : 'Chrome Desktop' };
+    }
+
+    const isSafari = /Safari/i.test(ua) && /Version\/(\d+)/i.test(ua);
+    if (isSafari) {
+      const isMobile = /iPhone|iPad/i.test(ua);
+      return { allowed: true, name: isMobile ? 'Safari iOS' : 'Safari Desktop' };
+    }
+
+    return { allowed: false, name: 'Unknown Browser' };
   };
 
   // Fungsi Verifikasi Lokasi Fisik Mahasiswa (Geofencing FSM Undip & Anti-Fake GPS)
@@ -563,8 +598,9 @@ export function StudentQuizPage() {
           locationAccuracy: locationRef.current.accuracy,
           locationDistance: locationRef.current.distance,
           locationStatus: locationRef.current.status,
-        isMock: locationRef.current.isMock || false,
           isMock: locationRef.current.isMock || false,
+          browserInfo: browserCheck.name,
+          deviceInfo: /Mobile|Android|iPhone|iPad/i.test(navigator.userAgent) ? 'Mobile' : 'Desktop',
         }),
       });
     } catch (_) {}
@@ -612,6 +648,8 @@ export function StudentQuizPage() {
         locationDistance: locationRef.current.distance,
         locationStatus: locationRef.current.status,
         isMock: locationRef.current.isMock || false,
+        browserInfo: detectAllowedBrowser(navigator.userAgent).name,
+        deviceInfo: /Mobile|Android|iPhone|iPad/i.test(navigator.userAgent) ? 'Mobile' : 'Desktop',
       };
 
       // Also notify live session immediately
@@ -732,6 +770,17 @@ export function StudentQuizPage() {
   // Start Exam Handler
   const handleStartExam = async (e) => {
     e.preventDefault();
+
+    // 0. Validasi Browser Resmi (Hanya Google Chrome & Safari resmi yang diizinkan)
+    const browserCheck = detectAllowedBrowser(navigator.userAgent);
+    if (!browserCheck.allowed) {
+      addToast(
+        `Akses Ditolak: Ujian ini hanya dapat dikerjakan menggunakan browser resmi Google Chrome atau Safari (Terdeteksi: ${browserCheck.name}). Silakan buka link ujian menggunakan Google Chrome atau Safari resmi.`,
+        'danger'
+      );
+      return;
+    }
+
     if (!scheduleState.valid) return;
 
     if (!studentCheck.canStart || studentCheck.error) {
@@ -807,8 +856,9 @@ export function StudentQuizPage() {
           locationAccuracy: locationRef.current.accuracy,
           locationDistance: locationRef.current.distance,
           locationStatus: locationRef.current.status,
-        isMock: locationRef.current.isMock || false,
           isMock: locationRef.current.isMock || false,
+          browserInfo: browserCheck.name,
+          deviceInfo: /Mobile|Android|iPhone|iPad/i.test(navigator.userAgent) ? 'Mobile' : 'Desktop',
         }),
       });
       const liveData = await liveRes.json();
@@ -916,7 +966,52 @@ export function StudentQuizPage() {
     };
   }, [stage, sendHeartbeat, executeSubmitQuiz]);
 
-  // Anti-Cheat Visibility & Blur Listeners
+  // Evaluasi dan Deteksi Split Screen (Multi-Window di HP)
+  const evaluateSplitScreen = useCallback(() => {
+    if (stage !== 'EXAM') return;
+
+    const isTouchOrMobile =
+      /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+      (window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+
+    if (!isTouchOrMobile) return;
+
+    // Abaikan jika mahasiswa sedang aktif fokus di elemen textarea/input quiz
+    const isTyping =
+      document.activeElement &&
+      (document.activeElement.tagName === 'TEXTAREA' ||
+        document.activeElement.tagName === 'INPUT');
+
+    if (isTyping) return;
+
+    const screenH = window.screen.height || window.screen.availHeight || 1;
+    const screenW = window.screen.width || window.screen.availWidth || 1;
+    const isLandscape = window.innerWidth > window.innerHeight;
+
+    const heightRatio = window.innerHeight / screenH;
+    const widthRatio = window.innerWidth / screenW;
+
+    // Pada split screen portrait: tinggi layar biasanya ~40%-55% (kurang dari 65%)
+    // Pada split screen landscape: lebar layar biasanya ~45%-55% (kurang dari 65%)
+    const isSplit =
+      (!isLandscape && heightRatio < 0.65) ||
+      (isLandscape && widthRatio < 0.65);
+
+    if (isSplit) {
+      setSplitScreenActive(true);
+      if (Date.now() - lastSplitWarnMsRef.current > 3500) {
+        lastSplitWarnMsRef.current = Date.now();
+        recordViolation(
+          'SPLIT_SCREEN',
+          'Terdeteksi Mode Layar Belah (Split Screen / Multi-Window di HP). Ujian WAJIB menggunakan satu layar penuh.'
+        );
+      }
+    } else {
+      setSplitScreenActive(false);
+    }
+  }, [stage, recordViolation]);
+
+  // Anti-Cheat Visibility, Split Screen, & Focus Listeners
   useEffect(() => {
     if (stage !== 'EXAM') return;
     let lastSwitchMs = 0;
@@ -929,43 +1024,67 @@ export function StudentQuizPage() {
     };
 
     const onWindowBlur = () => {
-      // Di perangkat mobile / layar sentuh, menutup keyboard virtual, menekan tombol back untuk sembunyikan keyboard,
-      // atau pergeseran fokus input memicu event window.blur palsu padahal mahasiswa tetap berada di tab ujian.
-      // Pelanggaran HANYA dicatat jika dokumen benar-benar tidak aktif / tersembunyi (document.hidden === true)
-      // atau jendela desktop benar-benar kehilangan fokus dalam jangka waktu stabil.
-      setTimeout(() => {
-        if (document.hidden) {
-          // Sudah di-handle oleh visibilitychange
-          return;
-        }
+      // Saat window kehilangan fokus (baik di desktop, split screen HP, maupun floating window AI):
+      // Tunggu 1200ms (debounce). Jika setelah 1.2 detik dokumen masih tidak memiliki fokus (!document.hasFocus()),
+      // maka mahasiswa sedang aktif berinteraksi dengan jendela / aplikasi lain (seperti ChatGPT di split screen).
+      if (blurTimeoutRef.current) clearTimeout(blurTimeoutRef.current);
 
-        // Jika dokumen masih terlihat di layar (terutama pada perangkat mobile / touch),
-        // penutupan keyboard virtual tidak boleh dianggap sebagai pelanggaran.
-        const isTouchOrMobile =
-          /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
-          (window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+      blurTimeoutRef.current = setTimeout(() => {
+        // Jika dokumen benar-benar diminimize / disembunyikan, sudah dicatat oleh onVisChange
+        if (document.hidden) return;
 
-        if (isTouchOrMobile) {
-          return;
-        }
+        // Cek fokus dokumen (bekerja di Desktop, Split Screen HP, & Floating Window AI)
+        const hasFocus = typeof document.hasFocus === 'function' ? document.hasFocus() : false;
 
-        // Untuk desktop: jika setelah 450ms jendela masih benar-benar tidak memiliki fokus
-        if (typeof document.hasFocus === 'function' && !document.hasFocus()) {
+        if (!hasFocus) {
+          // Jangan catat jika mahasiswa sedang aktif fokus di elemen textarea/input quiz
+          const isTyping =
+            document.activeElement &&
+            (document.activeElement.tagName === 'TEXTAREA' ||
+              document.activeElement.tagName === 'INPUT');
+
+          if (isTyping) return;
+
           if (Date.now() - lastSwitchMs > 1500) {
             lastSwitchMs = Date.now();
-            recordViolation('WINDOW_BLUR', 'Keluar dari fokus jendela ujian');
+            recordViolation(
+              'SPLIT_SCREEN_BLUR',
+              'Kehilangan fokus ujian: Terdeteksi membuka atau berinteraksi dengan aplikasi lain (Split Screen / Floating Window / Multitasking)'
+            );
           }
         }
-      }, 450);
+      }, 1200);
+    };
+
+    const onWindowFocus = () => {
+      // Jika mahasiswa kembali fokus ke kuis dalam 1.2 detik, batalkan penalti
+      if (blurTimeoutRef.current) {
+        clearTimeout(blurTimeoutRef.current);
+        blurTimeoutRef.current = null;
+      }
+      setTimeout(evaluateSplitScreen, 400);
+    };
+
+    const onResize = () => {
+      setTimeout(evaluateSplitScreen, 500);
     };
 
     document.addEventListener('visibilitychange', onVisChange);
     window.addEventListener('blur', onWindowBlur);
+    window.addEventListener('focus', onWindowFocus);
+    window.addEventListener('resize', onResize);
+
+    const splitInterval = setInterval(evaluateSplitScreen, 2500);
+
     return () => {
+      if (blurTimeoutRef.current) clearTimeout(blurTimeoutRef.current);
+      clearInterval(splitInterval);
       document.removeEventListener('visibilitychange', onVisChange);
       window.removeEventListener('blur', onWindowBlur);
+      window.removeEventListener('focus', onWindowFocus);
+      window.removeEventListener('resize', onResize);
     };
-  }, [stage, recordViolation]);
+  }, [stage, recordViolation, evaluateSplitScreen]);
 
   // Question Change & Auto-Save to localStorage
   const handleAnswerChange = useCallback((qNum, text) => {
@@ -1516,6 +1635,42 @@ export function StudentQuizPage() {
 
       {stage === 'EXAM' && (
         <div>
+          {splitScreenActive && (
+            <div className="splitscreen-overlay">
+              <div className="splitscreen-card">
+                <div style={{ fontSize: '3rem', marginBottom: 6 }}>📱🚫</div>
+                <h3 style={{ color: '#dc2626', fontWeight: 800, fontSize: '1.2rem', marginBottom: 8 }}>
+                  DILARANG MENGGUNAKAN SPLIT SCREEN!
+                </h3>
+                <p style={{ color: '#475569', fontSize: '0.86rem', lineHeight: 1.5, marginBottom: 12 }}>
+                  Sistem mendeteksi layar HP Anda sedang terbelah (Split Screen / Layar Belah). Ujian ini <strong>WAJIB menggunakan satu layar penuh (Full Screen)</strong> untuk menjaga integritas ujian dan mencegah kecurangan AI.
+                </p>
+                <div
+                  style={{
+                    background: '#fef2f2',
+                    border: '1px solid #fecaca',
+                    borderRadius: 8,
+                    padding: '10px 12px',
+                    marginBottom: 16,
+                    fontSize: '0.8rem',
+                    color: '#991b1b',
+                    fontWeight: 700,
+                  }}
+                >
+                  ⚠️ Pelanggaran dicatat otomatis ({violationCount}/{countsRef.current.max}). Silakan tutup aplikasi lain dan kembalikan browser ke layar penuh.
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-primary btn-touchable"
+                  style={{ width: '100%', fontWeight: 700, padding: '10px 16px' }}
+                  onClick={evaluateSplitScreen}
+                >
+                  🔄 Periksa Ulang Layar Penuh
+                </button>
+              </div>
+            </div>
+          )}
+
           <StickyExamHeader
             studentName={studentName}
             nim={nim}

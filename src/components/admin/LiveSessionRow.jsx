@@ -96,6 +96,22 @@ export const LiveSessionRow = memo(function LiveSessionRow({ index, session, onV
               🔁 Retake {session.attempt}
             </span>
           )}
+          {session.browserInfo && (
+            <span
+              className="badge"
+              style={{
+                fontSize: '0.68rem',
+                fontWeight: 700,
+                background: String(session.browserInfo).includes('Safari') ? '#fdf4ff' : '#eff6ff',
+                color: String(session.browserInfo).includes('Safari') ? '#a21caf' : '#1d4ed8',
+                border: `1px solid ${String(session.browserInfo).includes('Safari') ? '#f0abfc' : '#bfdbfe'}`,
+              }}
+              title={`Browser: ${session.browserInfo} (${session.deviceInfo || 'Device'})`}
+            >
+              {String(session.browserInfo).includes('Safari') ? '🧭 ' : '🌐 '}
+              {session.browserInfo}
+            </span>
+          )}
           {(session.locationStatus === 'FAKE_GPS_SPOOF' || session.locationStatus === 'FAKE_GPS_DETECTED') && (
             <span
               className="badge badge-danger"

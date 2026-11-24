@@ -559,6 +559,8 @@ export function AdminDashboardPage() {
       'Pelanggaran',
       'Lokasi Presensi',
       'Jarak ke FSM Undip (meter)',
+      'Browser',
+      'Perangkat',
       'Alamat IP',
     ];
 
@@ -616,6 +618,8 @@ export function AdminDashboardPage() {
         `${s.violation_count || 0}x`,
         escapeCsv(locStatusText),
         s.location_distance_meters !== null && s.location_distance_meters !== undefined ? s.location_distance_meters : '',
+        escapeCsv(s.browser_info || 'Chrome'),
+        escapeCsv(s.device_info || 'Mobile'),
         escapeCsv(s.client_ip || ''),
       ];
 
@@ -742,6 +746,8 @@ export function AdminDashboardPage() {
           jumlah_pelanggaran: s.violation_count || 0,
           lokasi_status: s.location_status || '-',
           jarak_ke_kampus_meter: s.location_distance_meters || null,
+          browser: s.browser_info || 'Chrome',
+          perangkat: s.device_info || 'Mobile',
           detail_jawaban: detailJawaban,
         };
       }),

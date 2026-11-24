@@ -106,6 +106,22 @@ export const SubmissionRow = memo(function SubmissionRow({
               🔁 Retake (Ke-{sub.attempt})
             </span>
           )}
+          {sub.browser_info && (
+            <span
+              className="badge"
+              style={{
+                fontSize: '0.7rem',
+                fontWeight: 700,
+                background: String(sub.browser_info).includes('Safari') ? '#fdf4ff' : '#eff6ff',
+                color: String(sub.browser_info).includes('Safari') ? '#a21caf' : '#1d4ed8',
+                border: `1px solid ${String(sub.browser_info).includes('Safari') ? '#f0abfc' : '#bfdbfe'}`,
+              }}
+              title={`Browser: ${sub.browser_info} (${sub.device_info || 'Device'})`}
+            >
+              {String(sub.browser_info).includes('Safari') ? '🧭 ' : '🌐 '}
+              {sub.browser_info}
+            </span>
+          )}
           <span
             className="badge badge-info"
             style={{ fontSize: '0.7rem' }}

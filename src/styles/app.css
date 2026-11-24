@@ -880,6 +880,30 @@ body {
   pointer-events: auto;
 }
 
+/* Split Screen Anti-Cheat Overlay */
+.splitscreen-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 999999;
+  background: rgba(15, 23, 42, 0.95);
+  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  animation: fadeIn 0.2s ease-out;
+}
+.splitscreen-card {
+  background: #ffffff;
+  border-radius: 16px;
+  padding: 24px 20px;
+  max-width: 440px;
+  width: 100%;
+  text-align: center;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.3), 0 8px 10px -6px rgba(0, 0, 0, 0.3);
+  border: 2px solid #ef4444;
+}
+
 @media print {
   body { background: #fff !important; }
   .no-print { display: none !important; }
