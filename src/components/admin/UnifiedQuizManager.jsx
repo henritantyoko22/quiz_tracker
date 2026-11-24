@@ -91,7 +91,7 @@ export function UnifiedQuizManager({ token, quizList, onRefreshQuizList, showToa
 
         const [setRes, qRes] = await Promise.all([
           fetch(`${API_BASE}/v1/quiz/settings/${encodeURIComponent(qId)}`),
-          fetch(`${API_BASE}/v1/quiz/questions/${encodeURIComponent(qId)}`),
+          fetch(`${API_BASE}/v1/quiz/questions/${encodeURIComponent(qId)}?all=true`),
         ]);
         const setData = await setRes.json();
         const qData = await qRes.json();
@@ -633,7 +633,7 @@ export function UnifiedQuizManager({ token, quizList, onRefreshQuizList, showToa
                         fontWeight: 700,
                         textAlign: 'center',
                       }}
-                      title="Contoh: Isi 6 jika dari 12 butir soal di bank soal, mahasiswa hanya mengerjakan 6 soal acak. Kosongkan atau isi 0 jika seluruh butir dikerjakan."
+                      title="Tentukan berapa butir soal yang dikerjakan mahasiswa dari bank soal ini. Kosongkan atau isi 0 jika seluruh butir dikerjakan."
                     />
                     <span style={{ fontSize: '0.74rem', color: '#64748b' }}>butir</span>
                   </div>

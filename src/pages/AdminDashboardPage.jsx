@@ -640,7 +640,7 @@ export function AdminDashboardPage() {
       uniqueQuizIds.map(async (qId) => {
         try {
           const res = await fetch(
-            `${API_BASE}/v1/quiz/questions/${encodeURIComponent(qId)}`
+            `${API_BASE}/v1/quiz/questions/${encodeURIComponent(qId)}?all=true`
           );
           const d = await res.json();
           if (res.ok && Array.isArray(d.data)) {
@@ -817,7 +817,7 @@ export function AdminDashboardPage() {
       uniqueQuizIds.map(async (qId) => {
         try {
           const res = await fetch(
-            `${API_BASE}/v1/quiz/questions/${encodeURIComponent(qId)}`
+            `${API_BASE}/v1/quiz/questions/${encodeURIComponent(qId)}?all=true`
           );
           const d = await res.json();
           if (res.ok && Array.isArray(d.data)) {

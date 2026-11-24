@@ -934,10 +934,11 @@ app.post('/v1/admin/quiz/settings', authenticate, requireRole('SUPERADMIN', 'DOS
 // Mengambil daftar soal essay kuis (Mendukung Bank Soal & Pengacakan Deterministik per NIM)
 app.get('/v1/quiz/questions/:quizId', async (req, res) => {
   const { quizId } = req.params;
-  const { nim, attempt } = req.query;
+  const { nim, attempt, all } = req.query;
   const cleanQuizId = (quizId || '').trim();
   const cleanNim = (nim || '').trim();
   const attemptNum = parseInt(attempt) || 1;
+  const forceAll = all === 'true' || all === '1';
 
   try {
     const result = await db.query(
@@ -968,12 +969,11 @@ app.get('/v1/quiz/questions/:quizId', async (req, res) => {
     const isShuffle = Boolean(setRes.rows[0]?.shuffle_questions);
 
     let finalQuestions = result.rows;
-    // Jika NIM disediakan dan (shuffle aktif ATAU question_count > 0)
-    if (cleanNim && (isShuffle || (qCount > 0 && qCount < result.rows.length))) {
+    // PENTING: Pengacakan atau pembatasan kuota soal (sampling) HANYA berlaku untuk mahasiswa saat ujian
+    // (ketika NIM disediakan) dan BUKAN ketika diminta seluruh bank soal (all=true).
+    // Untuk Pengelola Soal (Admin/Dosen) dan Ekspor Nilai, SELALU kembalikan seluruh bank soal secara lengkap!
+    if (!forceAll && cleanNim && (isShuffle || (qCount > 0 && qCount < result.rows.length))) {
       finalQuestions = getAssignedQuestionsForStudent(result.rows, cleanNim, cleanQuizId, attemptNum, qCount, isShuffle);
-    } else if (qCount > 0 && qCount < result.rows.length && !cleanNim) {
-      // Jika tanpa NIM (misal preview umum), ambil sejumlah qCount
-      finalQuestions = result.rows.slice(0, qCount);
     }
 
     res.json({
@@ -981,7 +981,7 @@ app.get('/v1/quiz/questions/:quizId', async (req, res) => {
       quizId: cleanQuizId,
       totalBank: result.rows.length,
       questionCount: finalQuestions.length,
-      isShuffled: isShuffle,
+      isShuffled: !forceAll && Boolean(cleanNim && isShuffle),
       data: finalQuestions
     });
   } catch (err) {

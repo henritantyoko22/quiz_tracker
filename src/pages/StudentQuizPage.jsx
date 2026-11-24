@@ -200,10 +200,12 @@ export function StudentQuizPage() {
           return;
         }
 
-        const bankTotal = settings.total_bank_questions || questions.length;
-        const qCountText = bankTotal > questions.length
-          ? `${questions.length} Soal Essay (dari Bank Soal ${bankTotal} Butir)`
-          : `${questions.length} Soal Essay`;
+        const bankTotal = Number(settings.total_bank_questions) || questions.length;
+        const targetQCount = Number(settings.question_count || settings.total_questions) || bankTotal;
+        const assignedCount = (targetQCount > 0 && targetQCount < bankTotal) ? targetQCount : bankTotal;
+        const qCountText = assignedCount < bankTotal
+          ? `${assignedCount} Soal Essay Acak (dari Bank Soal ${bankTotal} Butir)`
+          : `${bankTotal} Soal Essay`;
 
         setScheduleState({
           loading: false,
