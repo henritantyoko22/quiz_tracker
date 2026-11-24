@@ -28,7 +28,19 @@ export const QuestionCard = memo(function QuestionCard({
           {(value || '').length} Karakter
         </span>
       </div>
-      <div className="q-text">{question.question_text}</div>
+      <div
+        className="q-text"
+        onContextMenu={(e) => e.preventDefault()}
+        onCopy={(e) => onBlockClipboard(e, 'Copy teks pertanyaan soal')}
+        style={{
+          userSelect: 'none',
+          WebkitUserSelect: 'none',
+          MozUserSelect: 'none',
+          msUserSelect: 'none',
+        }}
+      >
+        {question.question_text}
+      </div>
       <textarea
         className="essay-textarea"
         placeholder={`Ketik jawaban Anda untuk soal nomor ${qNum} di sini...`}

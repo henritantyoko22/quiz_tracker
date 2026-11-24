@@ -1292,11 +1292,24 @@ app.post('/v1/quiz/submit', async (req, res) => {
     const finalViolationCount = Math.max(dbViolationCount, clientVCount);
 
     // 4. Server-enforced: Cegah manipulasi status oleh mahasiswa!
-    // Jika pelanggaran >= batas toleransi server, paksa status DISQUALIFIED!
+    // Jika pelanggaran >= batas toleransi server ATAU ada pelanggaran fatal (misal screenshot), paksa status DISQUALIFIED!
     let finalStatus = status || 'COMPLETED';
-    if (finalViolationCount >= serverMaxViolations) {
+    if (finalViolationCount >= serverMaxViolations || status === 'DISQUALIFIED') {
       finalStatus = 'DISQUALIFIED';
     }
+
+    // Cek apakah ada pelanggaran fatal (seperti screenshot) yang tercatat di database
+    try {
+      const fatalRes = await db.query(
+        `SELECT id, violation_type FROM quiz_violations 
+         WHERE (user_id = $1 OR user_id = $2) AND quiz_id = $3 AND violation_type IN ('FATAL_SCREENSHOT', 'SCREENSHOT')
+         LIMIT 1`,
+        [cleanNim, studentRecord.nama, cleanQuizId]
+      );
+      if (fatalRes.rows.length > 0) {
+        finalStatus = 'DISQUALIFIED';
+      }
+    } catch (_) {}
 
     const durSec = parseInt(durationSeconds) >= 0 ? parseInt(durationSeconds) : 0;
     const safeQTimings = Array.isArray(questionTimings) ? questionTimings.slice(0, 50) : null;
@@ -1404,8 +1417,12 @@ app.post('/v1/violations', async (req, res) => {
     });
   }
 
-  // Whitelist jenis pelanggaran
-  const allowedTypes = ['TAB_SWITCH', 'WINDOW_BLUR', 'COPY_PASTE', 'DEVTOOLS_OPEN', 'FULLSCREEN_EXIT', 'SUSPICIOUS_KEY'];
+  // Whitelist jenis pelanggaran (termasuk pelanggaran fatal screenshot & split-screen)
+  const allowedTypes = [
+    'TAB_SWITCH', 'WINDOW_BLUR', 'COPY_PASTE', 'DEVTOOLS_OPEN',
+    'FULLSCREEN_EXIT', 'SUSPICIOUS_KEY', 'FATAL_SCREENSHOT',
+    'SCREENSHOT', 'SPLIT_SCREEN', 'SPLIT_SCREEN_BLUR', 'FAKE_GPS_SPOOF'
+  ];
   const safeType = allowedTypes.includes(type) ? type : 'VIOLATION';
   const safeDetail = String(detail || 'Pelanggaran integritas proctoring').substring(0, 500);
 
@@ -1420,6 +1437,14 @@ app.post('/v1/violations', async (req, res) => {
     if (activeSession) {
       activeSession.violationCount = (activeSession.violationCount || 0) + 1;
       activeSession.lastHeartbeat = Date.now();
+      if (safeType === 'FATAL_SCREENSHOT' || safeType === 'SCREENSHOT') {
+        activeSession.status = 'DISQUALIFIED';
+        activeSession.lastAction = {
+          type: 'FATAL_SCREENSHOT',
+          questionText: 'Pelanggaran Fatal: Screenshot Soal Ujian',
+          timestamp: new Date().toISOString()
+        };
+      }
     }
 
     res.json({ status: 'success' });

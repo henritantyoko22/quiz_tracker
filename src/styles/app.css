@@ -904,8 +904,26 @@ body {
   border: 2px solid #ef4444;
 }
 
+/* Anti-Screenshot & Anti-Capture Protection */
+.q-text {
+  user-select: none !important;
+  -webkit-user-select: none !important;
+  -moz-user-select: none !important;
+  -ms-user-select: none !important;
+  -webkit-touch-callout: none !important;
+}
+
 @media print {
   body { background: #fff !important; }
   .no-print { display: none !important; }
   .table-scroll-container { max-height: none !important; overflow: visible !important; }
+
+  /* Sembunyikan seluruh butir soal jika user mencoba Print / Save to PDF */
+  .exam-container,
+  .question-card,
+  .q-text,
+  .sticky-exam-header {
+    display: none !important;
+    visibility: hidden !important;
+  }
 }

@@ -615,7 +615,7 @@ export function StudentQuizPage() {
 
   // Reliable Submit Engine with 5x Auto-Retry & Offline Queue
   const executeSubmitQuiz = useCallback(
-    async (finalStatus = 'COMPLETED', reasonLabel = 'Selesai Mengerjakan') => {
+    async (finalStatus = 'COMPLETED', reasonLabel = 'Selesai Mengerjakan', extraMeta = {}) => {
       if (isSubmittingRef.current) return;
       isSubmittingRef.current = true;
       isExamActiveRef.current = false;
@@ -708,6 +708,11 @@ export function StudentQuizPage() {
         localStorage.setItem(pendingKey, JSON.stringify(payload));
       }
 
+      const isFatalScreenshot = Boolean(
+        extraMeta.isFatalScreenshot ||
+        (reasonLabel && (reasonLabel.toLowerCase().includes('screenshot') || reasonLabel.toLowerCase().includes('tangkapan layar')))
+      );
+
       setSubmitting(false);
       setFinishSummary({
         sentSuccess,
@@ -717,6 +722,8 @@ export function StudentQuizPage() {
         violations: countsRef.current.total,
         payload,
         pendingKey,
+        isFatalScreenshot,
+        fatalReason: extraMeta.fatalReason || reasonLabel,
       });
       setStage('FINISHED');
     },
@@ -771,6 +778,64 @@ export function StudentQuizPage() {
           `Diskualifikasi otomatis (${countsRef.current.total}x pelanggaran)`
         );
       }
+    },
+    [addToast, sendHeartbeat, executeSubmitQuiz]
+  );
+
+  // Pelanggaran Fatal Screenshot: Mengambil Tangkapan Layar Soal -> Langsung Diskualifikasi Seketika!
+  const triggerFatalScreenshotViolation = useCallback(
+    (triggerSource = 'PrintScreen / Tangkapan Layar') => {
+      if (!isExamActiveRef.current || isSubmittingRef.current) return;
+
+      const fatalDetail = `Pelanggaran Fatal: Terdeteksi ${triggerSource}. Mengambil tangkapan layar (screenshot) soal ujian dilarang keras demi menjaga kerahasiaan soal dan kejujuran akademik.`;
+
+      // 1. Bersihkan clipboard seketika agar gambar/teks screenshot tidak tersimpan
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText('DILARANG MELAKUKAN SCREENSHOT SOAL UJIAN! ANDA TELAH DIDISKUALIFIKASI.');
+        }
+      } catch (_) {}
+
+      // 2. Tambah catatan pelanggaran
+      countsRef.current.copy += 1;
+      countsRef.current.total = countsRef.current.tab + countsRef.current.copy;
+      setViolationCount(countsRef.current.total);
+
+      // 3. Catat ke backend dengan tipe FATAL_SCREENSHOT
+      fetch(`${API_BASE}/v1/violations`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-exam-token': examTokenRef.current || '',
+        },
+        body: JSON.stringify({
+          userId: identityRef.current.name,
+          nim: identityRef.current.nim,
+          quizId: identityRef.current.quizId,
+          examToken: examTokenRef.current || '',
+          type: 'FATAL_SCREENSHOT',
+          detail: fatalDetail,
+          url: window.location.href,
+        }),
+      }).catch(() => {});
+
+      sendHeartbeat('DISQUALIFIED', {
+        type: 'FATAL_SCREENSHOT',
+        questionNum: (activeQuestionIndexRef.current || 0) + 1,
+        questionText: fatalDetail,
+      });
+
+      addToast(
+        '⛔ PELANGGARAN FATAL: Screenshot dilarang keras! Sesi ujian Anda langsung didiskualifikasi.',
+        'danger'
+      );
+
+      // 4. Langsung eksekusi submit ujian dengan status DISQUALIFIED
+      executeSubmitQuiz(
+        'DISQUALIFIED',
+        'DISKUALIFIKASI FATAL: Terdeteksi melakukan tangkapan layar (screenshot) soal ujian. Seluruh butir soal dilindungi dan dilarang keras di-screenshot!',
+        { isFatalScreenshot: true, fatalReason: fatalDetail }
+      );
     },
     [addToast, sendHeartbeat, executeSubmitQuiz]
   );
@@ -1098,10 +1163,73 @@ export function StudentQuizPage() {
       setTimeout(evaluateSplitScreen, 500);
     };
 
+    // Deteksi Tombol / Shortcut Screenshot & Tangkapan Layar
+    const onKeyDetectScreenshot = (e) => {
+      // 1. Tombol PrintScreen (Windows / Linux / Keyboard Fisik)
+      const isPrintScreen =
+        e.key === 'PrintScreen' ||
+        e.code === 'PrintScreen' ||
+        e.keyCode === 44 ||
+        e.which === 44;
+
+      // 2. Windows Snipping Tool: Win + Shift + S atau Ctrl + Shift + S
+      const isWindowsSnippet =
+        e.shiftKey &&
+        (e.metaKey || e.ctrlKey || e.altKey) &&
+        (e.key === 's' || e.key === 'S' || e.code === 'KeyS');
+
+      // 3. macOS Screenshot Shortcuts: Cmd + Shift + 3 / 4 / 5 / 6
+      const isMacScreenshot =
+        e.metaKey &&
+        e.shiftKey &&
+        (['3', '4', '5', '6'].includes(e.key) ||
+          ['Digit3', 'Digit4', 'Digit5', 'Digit6'].includes(e.code));
+
+      // 4. Print to PDF / Save as PDF dialog: Ctrl + P atau Cmd + P
+      const isPrintCommand =
+        (e.ctrlKey || e.metaKey) &&
+        (e.key === 'p' || e.key === 'P' || e.code === 'KeyP');
+
+      if (isPrintScreen || isWindowsSnippet || isMacScreenshot || isPrintCommand) {
+        try {
+          e.preventDefault();
+          e.stopPropagation();
+        } catch (_) {}
+
+        triggerFatalScreenshotViolation(
+          isPrintScreen
+            ? 'Menekan tombol PrintScreen (Tangkapan Layar)'
+            : isWindowsSnippet
+            ? 'Menekan shortcut Snipping Tool (Win/Ctrl + Shift + S)'
+            : isMacScreenshot
+            ? 'Menekan shortcut Tangkapan Layar macOS (Cmd + Shift + 3/4/5)'
+            : 'Mencoba mencetak / menyimpan soal ke PDF (Ctrl/Cmd + P)'
+        );
+      }
+    };
+
+    // Deteksi event beforeprint jika dialog cetak browser aktif
+    const onBeforePrint = (e) => {
+      try {
+        e.preventDefault();
+      } catch (_) {}
+      triggerFatalScreenshotViolation('Membuka dialog cetak halaman / simpan ke PDF');
+    };
+
+    // Cegah klik kanan (context menu) pada area ujian
+    const onContextMenu = (e) => {
+      e.preventDefault();
+      addToast('⚠️ Klik kanan dinonaktifkan demi keamanan soal ujian.', 'warning');
+    };
+
     document.addEventListener('visibilitychange', onVisChange);
     window.addEventListener('blur', onWindowBlur);
     window.addEventListener('focus', onWindowFocus);
     window.addEventListener('resize', onResize);
+    window.addEventListener('keydown', onKeyDetectScreenshot, true);
+    window.addEventListener('keyup', onKeyDetectScreenshot, true);
+    window.addEventListener('beforeprint', onBeforePrint);
+    window.addEventListener('contextmenu', onContextMenu);
 
     const splitInterval = setInterval(evaluateSplitScreen, 2500);
 
@@ -1112,8 +1240,12 @@ export function StudentQuizPage() {
       window.removeEventListener('blur', onWindowBlur);
       window.removeEventListener('focus', onWindowFocus);
       window.removeEventListener('resize', onResize);
+      window.removeEventListener('keydown', onKeyDetectScreenshot, true);
+      window.removeEventListener('keyup', onKeyDetectScreenshot, true);
+      window.removeEventListener('beforeprint', onBeforePrint);
+      window.removeEventListener('contextmenu', onContextMenu);
     };
-  }, [stage, recordViolation, evaluateSplitScreen]);
+  }, [stage, recordViolation, evaluateSplitScreen, triggerFatalScreenshotViolation, addToast]);
 
   // Question Change & Auto-Save to localStorage
   const handleAnswerChange = useCallback((qNum, text) => {
@@ -1710,6 +1842,29 @@ export function StudentQuizPage() {
             maxViolations={countsRef.current.max}
           />
 
+          {/* Himbauan Anti-Screenshot Tegas */}
+          <div
+            style={{
+              maxWidth: 860,
+              margin: '10px auto 0',
+              padding: '8px 14px',
+              background: '#fef2f2',
+              border: '1px solid #fecaca',
+              borderRadius: 8,
+              fontSize: '0.78rem',
+              fontWeight: 700,
+              color: '#991b1b',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+            }}
+          >
+            <span>🚫</span>
+            <span>
+              <strong>PERINGATAN INTEGRITAS:</strong> Dilarang mengambil tangkapan layar (Screenshot / PrintScreen). Aktivitas screenshot merupakan <u>pelanggaran fatal</u> yang langsung mendiskualifikasi ujian secara otomatis!
+            </span>
+          </div>
+
           <div className="exam-container">
             {scheduleState.questions.map((q, idx) => (
               <QuestionCard
@@ -1745,16 +1900,25 @@ export function StudentQuizPage() {
 
       {stage === 'FINISHED' && finishSummary && (
         <div className="login-wrapper">
-          <div className="login-card" style={{ textAlign: 'center' }}>
-            <div style={{ fontSize: '3rem', marginBottom: 10 }}>
-              {finishSummary.finalStatus === 'DISQUALIFIED'
+          <div className="login-card" style={{ textAlign: 'center', maxWidth: 520 }}>
+            <div style={{ fontSize: '3.2rem', marginBottom: 10 }}>
+              {finishSummary.isFatalScreenshot || finishSummary.finalStatus === 'DISQUALIFIED'
                 ? '⛔'
                 : finishSummary.sentSuccess
                 ? '✅'
                 : '⚠️'}
             </div>
-            <h2 style={{ fontSize: '1.35rem', fontWeight: 800, marginBottom: 6 }}>
-              {finishSummary.finalStatus === 'DISQUALIFIED'
+            <h2
+              style={{
+                fontSize: '1.35rem',
+                fontWeight: 800,
+                marginBottom: 6,
+                color: finishSummary.isFatalScreenshot ? '#b91c1c' : '#1e293b',
+              }}
+            >
+              {finishSummary.isFatalScreenshot
+                ? 'DISKUALIFIKASI FATAL: Dilarang Screenshot Soal'
+                : finishSummary.finalStatus === 'DISQUALIFIED'
                 ? 'Sesi Ujian Didiskualifikasi'
                 : finishSummary.sentSuccess
                 ? 'Jawaban Berhasil Terkirim!'
@@ -1763,6 +1927,36 @@ export function StudentQuizPage() {
             <p style={{ fontSize: '0.86rem', color: '#64748b', marginBottom: 18 }}>
               {finishSummary.reasonLabel}
             </p>
+
+            {/* KOTAK PENJELASAN KHUSUS PELANGGARAN FATAL SCREENSHOT */}
+            {finishSummary.isFatalScreenshot && (
+              <div
+                style={{
+                  background: '#fef2f2',
+                  border: '2px solid #ef4444',
+                  borderRadius: 12,
+                  padding: '16px 18px',
+                  marginBottom: 18,
+                  textAlign: 'left',
+                  color: '#991b1b',
+                  boxShadow: '0 4px 12px rgba(239, 68, 68, 0.12)',
+                }}
+              >
+                <div style={{ fontWeight: 800, fontSize: '0.94rem', display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                  <span>📸</span> TINDAKAN TERLARANG: TANGKAPAN LAYAR (SCREENSHOT)
+                </div>
+                <div style={{ fontSize: '0.84rem', lineHeight: 1.6, color: '#7f1d1d' }}>
+                  Sistem keamanan mendeteksi aktivitas tangkapan layar (<em>screenshot</em> / <em>printscreen</em> / <em>screen capture</em>) pada halaman ujian Anda.
+                  <br /><br />
+                  <strong>Alasan Larangan Screenshot Soal:</strong>
+                  <ul style={{ margin: '6px 0 0 18px', padding: 0 }}>
+                    <li>Seluruh butir soal ujian dilindungi oleh kerahasiaan akademik institusi.</li>
+                    <li>Mengambil atau membagikan screenshot soal dikategorikan sebagai <strong>Kecurangan Berat / Pelanggaran Fatal</strong>.</li>
+                    <li>Pelanggaran ini <strong>TIDAK memiliki toleransi kuota</strong> dan langsung mendiskualifikasi serta membatalkan seluruh lembar jawaban Anda seketika.</li>
+                  </ul>
+                </div>
+              </div>
+            )}
 
             <div
               style={{
