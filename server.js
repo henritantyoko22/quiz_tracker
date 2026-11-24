@@ -623,6 +623,12 @@ async function initDbTables() {
       );
     `);
 
+    // Indeks performa database agar query dashboard ribuan submission tetap instan (< 15ms)
+    await db.query(`CREATE INDEX IF NOT EXISTS idx_submissions_submitted_at ON quiz_submissions (submitted_at DESC);`);
+    await db.query(`CREATE INDEX IF NOT EXISTS idx_submissions_quiz_id ON quiz_submissions (quiz_id);`);
+    await db.query(`CREATE INDEX IF NOT EXISTS idx_submissions_nim ON quiz_submissions (nim);`);
+    await db.query(`CREATE INDEX IF NOT EXISTS idx_violations_quiz_user ON quiz_violations (quiz_id, user_id);`);
+
     // 5. Auto-sync data mahasiswa (PPK, Algoritma Evolusioner, & Internet of Things / IoT)
     try {
       const allStudentLists = [];
@@ -2236,30 +2242,129 @@ try {
   algoNimsSet = new Set(require('./src/data/students_algo_evolusioner.json').map(s => s.nim));
 } catch (_) {}
 
-// Rekap jawaban mahasiswa lengkap dengan laporan pelanggaran
+// Rekap jawaban mahasiswa dengan Server-Side Filtering, WHERE + LIMIT/OFFSET Pagination, & Lazy JSONB Loading
 app.get('/v1/admin/submissions', authenticate, async (req, res) => {
-  try {
-    const query = `
-      SELECT 
-        s.id, 
-        s.user_id AS nama, 
-        s.nim, 
-        s.quiz_id, 
-        s.answers, 
-        s.status, 
-        s.grade, 
-        s.feedback, 
+  const isExport = req.query.export === 'true' || req.query.export === '1';
+  const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+  const rawLimit = String(req.query.limit || '25').toUpperCase();
+  const limitNum = isExport
+    ? null
+    : rawLimit === 'ALL'
+    ? 500
+    : Math.min(500, Math.max(1, parseInt(rawLimit, 10) || 25));
+  const offsetNum = limitNum ? (page - 1) * limitNum : 0;
+
+  const course = String(req.query.course || 'ALL').trim().toUpperCase();
+  const quizId = String(req.query.quizId || 'ALL').trim();
+  const kelas = String(req.query.kelas || 'ALL').trim().toUpperCase();
+  const status = String(req.query.status || 'ALL').trim().toUpperCase();
+  const violation = String(req.query.violation || 'ALL').trim().toUpperCase();
+  const search = String(req.query.search || '').trim();
+  const sort = String(req.query.sort || 'submitted_at-desc').trim();
+
+  // Whitelist ORDER BY
+  const sortMap = {
+    'submitted_at-desc': { inner: 'submitted_at DESC NULLS LAST, id DESC', outer: 'p.submitted_at DESC NULLS LAST, p.id DESC' },
+    'submitted_at-asc': { inner: 'submitted_at ASC NULLS LAST, id ASC', outer: 'p.submitted_at ASC NULLS LAST, p.id ASC' },
+    'grade-desc': { inner: 'COALESCE(grade_num, -1) DESC, submitted_at DESC NULLS LAST, id DESC', outer: 'COALESCE(p.grade_num, -1) DESC, p.submitted_at DESC NULLS LAST, p.id DESC' },
+    'grade-asc': { inner: 'COALESCE(grade_num, 9999) ASC, submitted_at DESC NULLS LAST, id DESC', outer: 'COALESCE(p.grade_num, 9999) ASC, p.submitted_at DESC NULLS LAST, p.id DESC' },
+    'nama-asc': { inner: "LOWER(COALESCE(nama, '')) ASC, id DESC", outer: "LOWER(COALESCE(p.nama, '')) ASC, p.id DESC" },
+    'nama-desc': { inner: "LOWER(COALESCE(nama, '')) DESC, id DESC", outer: "LOWER(COALESCE(p.nama, '')) DESC, p.id DESC" },
+    'nim-asc': { inner: 'nim ASC, id DESC', outer: 'p.nim ASC, p.id DESC' },
+    'nim-desc': { inner: 'nim DESC, id DESC', outer: 'p.nim DESC, p.id DESC' },
+    'violation_count-desc': { inner: 'violation_count DESC, submitted_at DESC NULLS LAST, id DESC', outer: 'p.violation_count DESC, p.submitted_at DESC NULLS LAST, p.id DESC' },
+    'violation_count-asc': { inner: 'violation_count ASC, submitted_at DESC NULLS LAST, id DESC', outer: 'p.violation_count ASC, p.submitted_at DESC NULLS LAST, p.id DESC' }
+  };
+  const activeSort = sortMap[sort] || sortMap['submitted_at-desc'];
+
+  // Susun klausa WHERE terparameterisasi (tanpa menyentuh kolom JSONB berat)
+  const params = [];
+  const whereWithoutClass = [];
+
+  if (course && course !== 'ALL') {
+    if (course === 'IOT') {
+      whereWithoutClass.push(`UPPER(mata_kuliah) LIKE '%IOT%'`);
+    } else if (course === 'ALGO') {
+      whereWithoutClass.push(`(UPPER(mata_kuliah) LIKE '%ALGO%' OR UPPER(mata_kuliah) LIKE '%EVOLUSIONER%')`);
+    } else if (course === 'PPK') {
+      whereWithoutClass.push(`(UPPER(mata_kuliah) LIKE '%PPK%' OR UPPER(mata_kuliah) LIKE '%PERANGKAT KERAS%')`);
+    }
+  }
+
+  if (quizId && quizId !== 'ALL') {
+    params.push(quizId);
+    whereWithoutClass.push(`quiz_id = $${params.length}`);
+  }
+
+  if (status && status !== 'ALL') {
+    if (status === 'COMPLETED') {
+      whereWithoutClass.push(`status IN ('COMPLETED', 'SUBMITTED_MANUALLY', 'SUBMITTED')`);
+    } else if (status === 'DISQUALIFIED') {
+      whereWithoutClass.push(`status = 'DISQUALIFIED'`);
+    } else if (status === 'TIME_EXPIRED') {
+      whereWithoutClass.push(`status = 'TIME_EXPIRED'`);
+    }
+  }
+
+  if (violation && violation !== 'ALL') {
+    if (violation === 'CLEAN') {
+      whereWithoutClass.push(`violation_count = 0`);
+    } else if (violation === 'HAS_VIOLATION') {
+      whereWithoutClass.push(`violation_count > 0`);
+    } else if (violation === 'MAX_VIOLATION') {
+      whereWithoutClass.push(`(violation_count >= max_violations OR status = 'DISQUALIFIED')`);
+    }
+  }
+
+  if (search) {
+    params.push(`%${search}%`);
+    whereWithoutClass.push(`(nama ILIKE $${params.length} OR nim ILIKE $${params.length})`);
+  }
+
+  const allWhere = [...whereWithoutClass];
+  if (kelas && kelas !== 'ALL') {
+    params.push(kelas);
+    allWhere.push(`UPPER(TRIM(kelas)) = $${params.length}`);
+  }
+
+  const whereWithoutClassSql = whereWithoutClass.length > 0 ? `WHERE ${whereWithoutClass.join(' AND ')}` : '';
+  const fullWhereSql = allWhere.length > 0 ? `WHERE ${allWhere.join(' AND ')}` : '';
+
+  const baseCteSql = `
+    WITH viol_counts AS (
+      SELECT quiz_id, user_id, COUNT(*)::int AS cnt
+      FROM quiz_violations
+      GROUP BY quiz_id, user_id
+    ),
+    base AS (
+      SELECT
+        s.id,
+        s.user_id AS nama,
+        s.nim,
+        s.quiz_id,
+        s.status,
+        s.grade,
+        CASE
+          WHEN s.grade IS NOT NULL AND TRIM(s.grade::text) ~ '^-?[0-9]+(\\.[0-9]+)?$'
+          THEN (TRIM(s.grade::text))::numeric
+          ELSE NULL
+        END AS grade_num,
+        s.feedback,
         s.submitted_at,
-        s.question_timings,
-        s.activity_log,
         COALESCE(s.duration_seconds, 0) AS duration_seconds,
         COALESCE(s.attempt, 1) AS attempt,
-        COALESCE(s.kelas, stu.kelas, '-') AS kelas,
+        COALESCE(NULLIF(TRIM(s.kelas), ''), stu.kelas, '-') AS kelas,
         stu.prodi,
-        COALESCE(qs.mata_kuliah, stu.mata_kuliah, 'PPK') AS mata_kuliah,
-        GREATEST(COALESCE(s.violation_count, 0), COALESCE(v.total_violations, 0)) AS violation_count,
+        CASE
+          WHEN UPPER(COALESCE(qs.mata_kuliah, '')) LIKE '%IOT%' OR UPPER(s.quiz_id) LIKE '%IOT%' THEN 'IoT'
+          WHEN UPPER(COALESCE(qs.mata_kuliah, '')) LIKE '%ALGO%' OR UPPER(s.quiz_id) LIKE '%ALGO%' THEN 'Algoritma Evolusioner'
+          WHEN qs.quiz_id IS NOT NULL AND qs.mata_kuliah IS NOT NULL AND TRIM(qs.mata_kuliah) <> '' THEN qs.mata_kuliah
+          WHEN UPPER(COALESCE(stu.mata_kuliah, '')) LIKE '%IOT%' THEN 'IoT'
+          WHEN UPPER(COALESCE(stu.mata_kuliah, '')) LIKE '%ALGO%' THEN 'Algoritma Evolusioner'
+          ELSE 'PPK'
+        END AS mata_kuliah,
+        GREATEST(COALESCE(s.violation_count, 0), COALESCE(vn.cnt, 0) + COALESCE(vu.cnt, 0)) AS violation_count,
         COALESCE(s.max_violations, 3) AS max_violations,
-        COALESCE(v.violation_breakdown, '-') AS violation_summary,
         s.location_lat,
         s.location_lng,
         s.location_distance_meters,
@@ -2267,92 +2372,317 @@ app.get('/v1/admin/submissions', authenticate, async (req, res) => {
         s.location_status,
         s.client_ip,
         COALESCE(s.browser_info, 'Chrome') AS browser_info,
-        COALESCE(s.device_info, 'Mobile') AS device_info,
-        s.question_order
+        COALESCE(s.device_info, 'Mobile') AS device_info
       FROM quiz_submissions s
       LEFT JOIN quiz_settings qs ON qs.quiz_id = s.quiz_id
       LEFT JOIN quiz_students stu ON stu.nim = s.nim
-      LEFT JOIN (
-        SELECT 
-          user_id,
-          quiz_id,
-          COUNT(*) AS total_violations,
-          STRING_AGG(DISTINCT violation_type, ', ') AS violation_breakdown
-        FROM quiz_violations
-        GROUP BY user_id, quiz_id
-      ) v ON (v.user_id = s.user_id OR v.user_id = s.nim) AND v.quiz_id = s.quiz_id
-      ORDER BY s.submitted_at DESC
+      LEFT JOIN viol_counts vn ON vn.quiz_id = s.quiz_id AND vn.user_id = s.nim
+      LEFT JOIN viol_counts vu ON vu.quiz_id = s.quiz_id AND vu.user_id = s.user_id AND s.user_id IS DISTINCT FROM s.nim
+    )
+  `;
+
+  try {
+    const rowParams = [...params];
+    let limitOffsetSql = '';
+    if (limitNum !== null) {
+      rowParams.push(limitNum);
+      const limitIdx = rowParams.length;
+      rowParams.push(offsetNum);
+      const offsetIdx = rowParams.length;
+      limitOffsetSql = `LIMIT $${limitIdx} OFFSET $${offsetIdx}`;
+    }
+
+    // 1. Query Baris Terpaginasi (JSONB answers/question_order HANYA dibaca untuk baris halaman ini!)
+    const rowsQuery = `
+      ${baseCteSql},
+      paged AS (
+        SELECT * FROM base
+        ${fullWhereSql}
+        ORDER BY ${activeSort.inner}
+        ${limitOffsetSql}
+      )
+      SELECT
+        p.*,
+        raw_sub.answers,
+        ${isExport ? 'raw_sub.question_order,' : ''}
+        COALESCE(vsum.violation_summary, '-') AS violation_summary
+      FROM paged p
+      JOIN quiz_submissions raw_sub ON raw_sub.id = p.id
+      LEFT JOIN LATERAL (
+        SELECT STRING_AGG(DISTINCT qv.violation_type, ', ') AS violation_summary
+        FROM quiz_violations qv
+        WHERE qv.quiz_id = p.quiz_id AND (qv.user_id = p.nim OR qv.user_id = p.nama)
+      ) vsum ON (p.violation_count > 0)
+      ORDER BY ${activeSort.outer}
     `;
 
-    const result = await db.query(query);
-    const safeRows = (result.rows || []).map(r => {
-      let qTimings = r.question_timings;
-      if (typeof qTimings === 'string') {
-        try { qTimings = JSON.parse(qTimings); } catch (_) { qTimings = []; }
-      }
-      let actLog = r.activity_log;
-      if (typeof actLog === 'string') {
-        try { actLog = JSON.parse(actLog); } catch (_) { actLog = []; }
-      }
+    // 2. Query Statistik Ringan (Hanya kolom skalar tipis, tanpa menyentuh JSONB sama sekali)
+    const metaQuery = `
+      ${baseCteSql}
+      SELECT
+        (SELECT COUNT(*)::int FROM base) AS total_all,
+        (SELECT COUNT(*)::int FROM base WHERE UPPER(mata_kuliah) LIKE '%IOT%') AS count_iot,
+        (SELECT COUNT(*)::int FROM base WHERE UPPER(mata_kuliah) LIKE '%ALGO%' OR UPPER(mata_kuliah) LIKE '%EVOLUSIONER%') AS count_algo,
+        (SELECT COUNT(*)::int FROM base WHERE UPPER(mata_kuliah) NOT LIKE '%IOT%' AND UPPER(mata_kuliah) NOT LIKE '%ALGO%' AND UPPER(mata_kuliah) NOT LIKE '%EVOLUSIONER%') AS count_ppk,
+        (SELECT COUNT(*)::int FROM base ${fullWhereSql}) AS total_filtered,
+        (SELECT COUNT(*)::int FROM base ${fullWhereSql ? fullWhereSql + ' AND grade_num IS NOT NULL' : 'WHERE grade_num IS NOT NULL'}) AS graded_count,
+        (SELECT COUNT(*)::int FROM base ${fullWhereSql ? fullWhereSql + ' AND grade_num IS NULL' : 'WHERE grade_num IS NULL'}) AS ungraded_count,
+        (SELECT ROUND(AVG(grade_num), 1) FROM base ${fullWhereSql ? fullWhereSql + ' AND grade_num IS NOT NULL' : 'WHERE grade_num IS NOT NULL'}) AS avg_grade,
+        (SELECT COUNT(*)::int FROM base ${whereWithoutClassSql ? whereWithoutClassSql + " AND UPPER(TRIM(kelas)) = 'A'" : "WHERE UPPER(TRIM(kelas)) = 'A'"}) AS class_a,
+        (SELECT COUNT(*)::int FROM base ${whereWithoutClassSql ? whereWithoutClassSql + " AND UPPER(TRIM(kelas)) = 'B'" : "WHERE UPPER(TRIM(kelas)) = 'B'"}) AS class_b,
+        (SELECT COUNT(*)::int FROM base ${whereWithoutClassSql ? whereWithoutClassSql + " AND UPPER(TRIM(kelas)) = 'C'" : "WHERE UPPER(TRIM(kelas)) = 'C'"}) AS class_c,
+        (SELECT COUNT(*)::int FROM base ${whereWithoutClassSql ? whereWithoutClassSql + " AND UPPER(TRIM(kelas)) = 'D'" : "WHERE UPPER(TRIM(kelas)) = 'D'"}) AS class_d
+    `;
 
+    const [rowsResult, metaResult] = await Promise.all([
+      db.query(rowsQuery, rowParams),
+      isExport ? Promise.resolve(null) : db.query(metaQuery, params)
+    ]);
+
+    const safeRows = (rowsResult.rows || []).map(r => {
       let qOrder = r.question_order;
       if (typeof qOrder === 'string') {
         try { qOrder = JSON.parse(qOrder); } catch (_) { qOrder = null; }
       }
-
       let mk = r.mata_kuliah || 'PPK';
       const cleanQuiz = String(r.quiz_id || '').toUpperCase();
-      if (cleanQuiz.includes('IOT') || iotNimsSet.has(r.nim)) {
-        mk = 'IoT';
-      } else if (cleanQuiz.includes('ALGO') || algoNimsSet.has(r.nim)) {
-        mk = 'Algoritma Evolusioner';
-      }
+      if (cleanQuiz.includes('IOT')) mk = 'IoT';
+      else if (cleanQuiz.includes('ALGO')) mk = 'Algoritma Evolusioner';
 
-      return {
+      const out = {
         ...r,
-        mata_kuliah: mk,
+        mata_kuliah: mk
+      };
+      if (isExport) {
+        out.question_order = Array.isArray(qOrder) ? qOrder : null;
+      }
+      return out;
+    });
+
+    const m = metaResult?.rows?.[0] || {};
+    const totalFiltered = m.total_filtered !== undefined ? Number(m.total_filtered) : safeRows.length;
+    const effectivePageSize = limitNum || Math.max(1, totalFiltered);
+
+    res.json({
+      status: 'success',
+      data: safeRows,
+      meta: {
+        page,
+        limit: limitNum,
+        totalPages: Math.max(1, Math.ceil(totalFiltered / effectivePageSize)),
+        totalAll: Number(m.total_all ?? safeRows.length),
+        totalFiltered,
+        gradedCount: Number(m.graded_count ?? 0),
+        ungradedCount: Number(m.ungraded_count ?? 0),
+        avgGrade: m.avg_grade !== null && m.avg_grade !== undefined ? String(m.avg_grade) : '-',
+        courseCounts: {
+          total: Number(m.total_all ?? safeRows.length),
+          ppk: Number(m.count_ppk ?? 0),
+          iot: Number(m.count_iot ?? 0),
+          algo: Number(m.count_algo ?? 0)
+        },
+        classCounts: {
+          A: Number(m.class_a ?? 0),
+          B: Number(m.class_b ?? 0),
+          C: Number(m.class_c ?? 0),
+          D: Number(m.class_d ?? 0)
+        }
+      }
+    });
+  } catch (err) {
+    try {
+      const fbLimit = limitNum || 500;
+      const fallback = await db.query(
+        `SELECT id, user_id AS nama, nim, quiz_id, answers, status, grade, feedback, submitted_at,
+                COALESCE(duration_seconds, 0) AS duration_seconds,
+                COALESCE(violation_count, 0) AS violation_count, COALESCE(max_violations, 3) AS max_violations, '-' AS violation_summary
+         FROM quiz_submissions
+         ORDER BY submitted_at DESC
+         LIMIT $1 OFFSET $2`,
+        [fbLimit, offsetNum]
+      );
+      const cntRes = await db.query(`SELECT COUNT(*)::int AS cnt FROM quiz_submissions`);
+      const total = cntRes.rows[0]?.cnt || fallback.rows.length;
+      res.json({
+        status: 'success',
+        data: fallback.rows,
+        meta: {
+          page,
+          limit: fbLimit,
+          totalPages: Math.max(1, Math.ceil(total / fbLimit)),
+          totalAll: total,
+          totalFiltered: total,
+          gradedCount: 0,
+          ungradedCount: total,
+          avgGrade: '-',
+          courseCounts: { total, ppk: total, iot: 0, algo: 0 },
+          classCounts: { A: 0, B: 0, C: 0, D: 0 }
+        }
+      });
+    } catch (minErr) {
+      sendServerError(res, minErr, 'Gagal memuat rekap jawaban ujian.');
+    }
+  }
+});
+
+// Lazy-load detail lengkap 1 submission (question_order, question_timings, activity_log) saat modal diklik (< 2ms by PK)
+app.get('/v1/admin/submissions/:id', authenticate, async (req, res) => {
+  const subId = parseInt(req.params.id, 10);
+  if (isNaN(subId) || subId <= 0) {
+    return res.status(400).json({ status: 'error', message: 'ID submission tidak valid.' });
+  }
+  try {
+    const result = await db.query(
+      `SELECT id, nim, quiz_id, answers, question_order, question_timings, activity_log,
+              COALESCE(duration_seconds, 0) AS duration_seconds
+       FROM quiz_submissions
+       WHERE id = $1`,
+      [subId]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ status: 'error', message: 'Submission tidak ditemukan.' });
+    }
+    const r = result.rows[0];
+    let qTimings = r.question_timings;
+    if (typeof qTimings === 'string') {
+      try { qTimings = JSON.parse(qTimings); } catch (_) { qTimings = []; }
+    }
+    let actLog = r.activity_log;
+    if (typeof actLog === 'string') {
+      try { actLog = JSON.parse(actLog); } catch (_) { actLog = []; }
+    }
+    let qOrder = r.question_order;
+    if (typeof qOrder === 'string') {
+      try { qOrder = JSON.parse(qOrder); } catch (_) { qOrder = null; }
+    }
+
+    // Jika submission lama belum menyimpan question_order, ambil dari master quiz_questions
+    if (!Array.isArray(qOrder) || qOrder.length === 0) {
+      try {
+        const qRes = await db.query(
+          `SELECT id, question_text, question_type, COALESCE(expected_answer, '') AS expected_answer
+           FROM quiz_questions
+           WHERE quiz_id = $1
+           ORDER BY id ASC`,
+          [r.quiz_id]
+        );
+        if (qRes.rows.length > 0) {
+          qOrder = qRes.rows.map((q, idx) => ({ ...q, original_number: idx + 1 }));
+        }
+      } catch (_) {}
+    }
+
+    res.json({
+      status: 'success',
+      data: {
+        id: r.id,
+        answers: r.answers,
+        duration_seconds: r.duration_seconds,
         question_timings: Array.isArray(qTimings) ? qTimings : [],
         activity_log: Array.isArray(actLog) ? actLog : [],
         question_order: Array.isArray(qOrder) ? qOrder : null
-      };
-    });
-    res.json({ status: 'success', data: safeRows });
-  } catch (err) {
-    try {
-      const fallback = await db.query(
-        `SELECT id, user_id AS nama, nim, quiz_id, answers, status, grade, feedback, submitted_at,
-                question_timings, activity_log, COALESCE(duration_seconds, 0) AS duration_seconds,
-                0 AS violation_count, 3 AS max_violations, '-' AS violation_summary 
-         FROM quiz_submissions 
-         ORDER BY submitted_at DESC`
-      );
-      res.json({ status: 'success', data: fallback.rows });
-    } catch (fallbackErr) {
-      try {
-        const minimal = await db.query(
-          `SELECT id, user_id AS nama, nim, quiz_id, answers, status, grade, feedback, submitted_at,
-                  0 AS violation_count, 3 AS max_violations, '-' AS violation_summary 
-           FROM quiz_submissions 
-           ORDER BY submitted_at DESC`
-        );
-        res.json({ status: 'success', data: minimal.rows });
-      } catch (minErr) {
-        sendServerError(res, minErr, 'Gagal memuat rekap jawaban ujian.');
       }
+    });
+  } catch (err) {
+    sendServerError(res, err, 'Gagal memuat detail submission.');
+  }
+});
+
+// Helper pembersihan sesi & pelanggaran setelah submission dihapus oleh Admin/Dosen
+async function cleanupAfterDeletedSubmissions(deletedRows) {
+  if (!Array.isArray(deletedRows)) return;
+  for (const row of deletedRows) {
+    const cleanNim = String(row.nim || '').trim();
+    const cleanUser = String(row.user_id || '').trim();
+    const cleanQuizId = String(row.quiz_id || '').trim();
+    if (!cleanNim || !cleanQuizId) continue;
+
+    // Bersihkan sesi live gantung di memori
+    liveStudentSessions.delete(getLiveSessionKey(cleanNim, cleanQuizId));
+
+    // Jika mahasiswa tidak lagi memiliki submission sama sekali pada kuis ini,
+    // reset riwayat pelanggaran kuis tersebut agar dapat mengulang ujian dengan bersih bila diinstruksikan dosen
+    try {
+      const rem = await db.query(
+        `SELECT COUNT(*)::int AS cnt FROM quiz_submissions WHERE nim = $1 AND quiz_id = $2`,
+        [cleanNim, cleanQuizId]
+      );
+      if ((rem.rows[0]?.cnt || 0) === 0) {
+        await db.query(
+          `DELETE FROM quiz_violations WHERE quiz_id = $1 AND (user_id = $2 OR user_id = $3)`,
+          [cleanQuizId, cleanNim, cleanUser]
+        );
+      }
+    } catch (_) {}
+  }
+}
+
+// Hapus 1 submission mahasiswa (misal pengerjaan asal-asalan) - Hanya SUPERADMIN & DOSEN
+app.delete('/v1/admin/submissions/:id', authenticate, requireRole('SUPERADMIN', 'DOSEN'), async (req, res) => {
+  const subId = parseInt(req.params.id, 10);
+  if (isNaN(subId) || subId <= 0) {
+    return res.status(400).json({ status: 'error', message: 'ID submission tidak valid.' });
+  }
+  try {
+    const delRes = await db.query(
+      `DELETE FROM quiz_submissions
+       WHERE id = $1
+       RETURNING id, user_id, nim, quiz_id, attempt`,
+      [subId]
+    );
+    if (delRes.rows.length === 0) {
+      return res.status(404).json({ status: 'error', message: 'Data submission tidak ditemukan atau sudah dihapus.' });
     }
+    await cleanupAfterDeletedSubmissions(delRes.rows);
+    const deleted = delRes.rows[0];
+    res.json({
+      status: 'success',
+      message: `Submission ${deleted.user_id || deleted.nim} (Quiz #${deleted.quiz_id}) berhasil dihapus.`,
+      deleted
+    });
+  } catch (err) {
+    sendServerError(res, err, 'Gagal menghapus submission mahasiswa.');
+  }
+});
+
+// Hapus banyak submission sekaligus (Bulk Delete) - Hanya SUPERADMIN & DOSEN
+app.post('/v1/admin/submissions/bulk-delete', authenticate, requireRole('SUPERADMIN', 'DOSEN'), async (req, res) => {
+  const rawIds = Array.isArray(req.body.ids) ? req.body.ids : [];
+  const cleanIds = [...new Set(rawIds.map(id => parseInt(id, 10)).filter(id => !isNaN(id) && id > 0))];
+  if (cleanIds.length === 0) {
+    return res.status(400).json({ status: 'error', message: 'Pilih minimal 1 submission untuk dihapus.' });
+  }
+  try {
+    const delRes = await db.query(
+      `DELETE FROM quiz_submissions
+       WHERE id = ANY($1::int[])
+       RETURNING id, user_id, nim, quiz_id, attempt`,
+      [cleanIds]
+    );
+    await cleanupAfterDeletedSubmissions(delRes.rows);
+    res.json({
+      status: 'success',
+      message: `Berhasil menghapus ${delRes.rows.length} submission terpilih.`,
+      deletedCount: delRes.rows.length,
+      deletedIds: delRes.rows.map(r => r.id)
+    });
+  } catch (err) {
+    sendServerError(res, err, 'Gagal menghapus daftar submission terpilih.');
   }
 });
 
 // Detail audit log pelanggaran per mahasiswa
 app.get('/v1/admin/violations/detail', authenticate, async (req, res) => {
   const { userId, nim, quizId } = req.query;
+  const cleanQuizId = String(quizId || '').trim();
   try {
     const result = await db.query(
       `SELECT id, user_id, quiz_id, violation_type, detail, page_url, occurred_at
        FROM quiz_violations
        WHERE (user_id = $1 OR user_id = $2)
+         AND ($3 = '' OR quiz_id = $3)
        ORDER BY occurred_at ASC`,
-      [userId || '', nim || '']
+      [userId || '', nim || '', cleanQuizId]
     );
     res.json({ status: 'success', data: result.rows });
   } catch (err) {
@@ -2363,13 +2693,13 @@ app.get('/v1/admin/violations/detail', authenticate, async (req, res) => {
 // Penilaian (Grading) - Hanya SUPERADMIN & DOSEN (PROCTOR tidak boleh menilai)
 app.post('/v1/admin/submissions/grade', authenticate, requireRole('SUPERADMIN', 'DOSEN'), async (req, res) => {
   const { submissionId, grade, feedback } = req.body;
+  const cleanGrade = grade === null || grade === undefined || grade === '' ? null : parseInt(grade, 10);
   try {
-    const result = await db.query(
+    await db.query(
       `UPDATE quiz_submissions 
        SET grade = $1, feedback = $2 
-       WHERE id = $3 
-       RETURNING *`,
-      [parseInt(grade), feedback || '', submissionId]
+       WHERE id = $3`,
+      [isNaN(cleanGrade) ? null : cleanGrade, feedback || '', submissionId]
     );
     res.json({ status: 'success', message: 'Jawaban ujian berhasil disimpan.' });
   } catch (err) {
@@ -2787,7 +3117,7 @@ app.post('/v1/admin/submissions/auto-grade', authenticate, requireRole('SUPERADM
 
     let query = `SELECT id FROM quiz_submissions WHERE quiz_id = $1`;
     if (ungradeOnly !== false) {
-      query += ` AND (grade IS NULL OR grade = '')`;
+      query += ` AND (grade IS NULL OR TRIM(grade::text) = '')`;
     }
     query += ` ORDER BY id ASC LIMIT 50`;
 

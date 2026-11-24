@@ -1,12 +1,15 @@
 import React, { useState, useEffect, memo } from 'react';
-import { parseAnswersObject } from '../../services/api.js';
+import { parseAnswersObject, formatDuration } from '../../services/api.js';
 
 export const SubmissionRow = memo(function SubmissionRow({
   index,
   sub,
   role,
+  isSelected,
+  onToggleSelect,
   onSaveGrade,
   onAutoGrade,
+  onDelete,
   onOpenAnswerModal,
   onOpenViolationModal,
   onOpenTimingModal,
@@ -17,6 +20,7 @@ export const SubmissionRow = memo(function SubmissionRow({
   const [feedback, setFeedback] = useState(sub.feedback || '');
   const [saving, setSaving] = useState(false);
   const [autoGrading, setAutoGrading] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     setGrade(sub.grade !== null && sub.grade !== undefined ? sub.grade : '');
@@ -41,8 +45,29 @@ export const SubmissionRow = memo(function SubmissionRow({
     setAutoGrading(false);
   };
 
+  const handleDelete = async () => {
+    if (!onDelete || deleting) return;
+    setDeleting(true);
+    try {
+      await onDelete(sub);
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   return (
-    <tr>
+    <tr style={isSelected ? { background: '#fef2f2' } : undefined}>
+      {onToggleSelect && (
+        <td className="no-print" style={{ width: 38, textAlign: 'center' }}>
+          <input
+            type="checkbox"
+            checked={Boolean(isSelected)}
+            onChange={() => onToggleSelect(sub.id)}
+            style={{ width: 16, height: 16, cursor: 'pointer', accentColor: '#dc2626' }}
+            title="Pilih baris ini untuk hapus massal"
+          />
+        </td>
+      )}
       <td
         style={{
           width: 48,
@@ -189,6 +214,23 @@ export const SubmissionRow = memo(function SubmissionRow({
             ? new Date(sub.submitted_at).toLocaleString('id-ID')
             : '-'}
         </div>
+        {Number(sub.duration_seconds) > 0 && (
+          <div
+            style={{
+              fontSize: '0.72rem',
+              color: Number(sub.duration_seconds) < 60 ? '#dc2626' : '#64748b',
+              fontWeight: Number(sub.duration_seconds) < 60 ? 800 : 500,
+              marginTop: 2,
+            }}
+            title={
+              Number(sub.duration_seconds) < 60
+                ? 'Durasi pengerjaan sangat singkat (< 1 menit)'
+                : 'Total durasi pengerjaan mahasiswa'
+            }
+          >
+            ⏱️ {formatDuration(Number(sub.duration_seconds))}
+          </div>
+        )}
       </td>
       <td>
         <div
@@ -296,8 +338,8 @@ export const SubmissionRow = memo(function SubmissionRow({
         )}
       </td>
       {role !== 'PROCTOR' && (
-        <td className="no-print" style={{ minWidth: 220 }}>
-          <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
+        <td className="no-print" style={{ minWidth: 235 }}>
+          <div style={{ display: 'flex', gap: 5, marginBottom: 6, flexWrap: 'wrap' }}>
             <input
               type="number"
               min="0"
@@ -306,8 +348,8 @@ export const SubmissionRow = memo(function SubmissionRow({
               value={grade}
               onChange={(e) => setGrade(e.target.value)}
               style={{
-                width: 72,
-                padding: '5px 8px',
+                width: 66,
+                padding: '5px 7px',
                 borderRadius: 6,
                 border: '1px solid #cbd5e1',
                 fontSize: '0.8rem',
@@ -318,7 +360,7 @@ export const SubmissionRow = memo(function SubmissionRow({
               type="button"
               className="btn btn-success btn-xs"
               onClick={handleSave}
-              disabled={saving || autoGrading}
+              disabled={saving || autoGrading || deleting}
             >
               {saving ? '...' : '💾 Simpan'}
             </button>
@@ -328,10 +370,22 @@ export const SubmissionRow = memo(function SubmissionRow({
                 className="btn btn-xs"
                 style={{ background: '#7c3aed', color: '#ffffff' }}
                 onClick={handleAutoGrade}
-                disabled={saving || autoGrading}
+                disabled={saving || autoGrading || deleting}
                 title="Evaluasi otomatis jawaban ini menggunakan Gemini AI"
               >
                 {autoGrading ? '⏳ AI...' : '⚡ AI'}
+              </button>
+            )}
+            {onDelete && (
+              <button
+                type="button"
+                className="btn btn-danger btn-xs"
+                onClick={handleDelete}
+                disabled={saving || autoGrading || deleting}
+                title="Hapus submission mahasiswa ini (misal mengerjakan asal-asalan)"
+                style={{ padding: '5px 8px' }}
+              >
+                {deleting ? '⏳' : '🗑️'}
               </button>
             )}
           </div>

@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { API_BASE, getAuthHeaders } from '../services/api.js';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { API_BASE, getAuthHeaders, parseAnswersObject, formatDuration } from '../services/api.js';
 import { SubmissionRow } from '../components/admin/SubmissionRow.jsx';
 import { LiveSessionRow } from '../components/admin/LiveSessionRow.jsx';
 import { UnifiedQuizManager } from '../components/admin/UnifiedQuizManager.jsx';
@@ -29,15 +29,33 @@ export function AdminDashboardPage() {
   // Active Tab: SUBMISSIONS | LIVE | QUIZZES | USERS
   const [activeTab, setActiveTab] = useState('SUBMISSIONS');
 
-  // Data States
+  // Data States (Server-Side Paginated via WHERE + LIMIT/OFFSET)
   const [submissions, setSubmissions] = useState([]);
+  const [serverMeta, setServerMeta] = useState({
+    totalAll: 0,
+    totalFiltered: 0,
+    totalPages: 1,
+    gradedCount: 0,
+    ungradedCount: 0,
+    avgGrade: '-',
+    courseCounts: { total: 0, ppk: 0, iot: 0, algo: 0 },
+    classCounts: { A: 0, B: 0, C: 0, D: 0 },
+  });
   const [quizList, setQuizList] = useState([]);
   const [liveSessions, setLiveSessions] = useState([]);
   const [loadingData, setLoadingData] = useState(false);
 
+  // Selection state for Bulk Delete
+  const [selectedIds, setSelectedIds] = useState([]);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+
+  // Cache detail JSONB per submission ID agar buka ulang modal instan (0ms)
+  const detailCacheRef = useRef({});
+
   // Filters & Sorting State
   const [courseFilter, setCourseFilter] = useState('ALL'); // 'ALL' | 'PPK' | 'IOT' | 'ALGO'
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [quizFilter, setQuizFilter] = useState('ALL');
   const [classFilter, setClassFilter] = useState('ALL');
   const [statusFilter, setStatusFilter] = useState('ALL');
@@ -45,7 +63,7 @@ export function AdminDashboardPage() {
   const [sortKey, setSortKey] = useState('submitted_at-desc');
   const [autoGradeLoading, setAutoGradeLoading] = useState(false);
 
-  // Pagination State for Submissions Table (Mencegah Lag / Lemot saat Ratusan Mahasiswa)
+  // Pagination State for Submissions Table (Server-Side LIMIT/OFFSET)
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25); // 15, 25, 50, 100, ALL
 
@@ -123,27 +141,175 @@ export function AdminDashboardPage() {
     } catch (_) {}
   }, []);
 
-  const fetchSubmissions = useCallback(async () => {
-    if (!token) return;
-    setLoadingData(true);
-    try {
-      const res = await fetch(`${API_BASE}/v1/admin/submissions`, {
-        headers: getAuthHeaders(token),
+  // Debounce pencarian teks 300ms agar tidak membanjiri query database saat mengetik
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch((prev) => {
+        const next = searchQuery.trim();
+        if (prev !== next) setCurrentPage(1);
+        return next;
       });
-      if (res.status === 401) {
-        handleLogout();
-        return;
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
+  // Fetch Submissions dengan Server-Side Filtering + WHERE + LIMIT/OFFSET dari PostgreSQL
+  const fetchSubmissions = useCallback(
+    async (abortSignal) => {
+      if (!token) return;
+      setLoadingData(true);
+      try {
+        const params = new URLSearchParams({
+          page: String(currentPage),
+          limit: String(pageSize),
+          course: courseFilter,
+          quizId: quizFilter,
+          kelas: classFilter,
+          status: statusFilter,
+          violation: violationFilter,
+          search: debouncedSearch,
+          sort: sortKey,
+        });
+        const res = await fetch(`${API_BASE}/v1/admin/submissions?${params.toString()}`, {
+          headers: getAuthHeaders(token),
+          signal: typeof AbortSignal !== 'undefined' && abortSignal instanceof AbortSignal ? abortSignal : undefined,
+        });
+        if (res.status === 401) {
+          handleLogout();
+          return;
+        }
+        const data = await res.json();
+        const rows = data.data || data.submissions || [];
+        if (res.ok && Array.isArray(rows)) {
+          setSubmissions(rows);
+          if (data.meta) {
+            setServerMeta(data.meta);
+          }
+        }
+      } catch (err) {
+        if (err && err.name === 'AbortError') return;
+      } finally {
+        setLoadingData(false);
       }
-      const data = await res.json();
-      const rows = data.data || data.submissions || [];
-      if (res.ok && Array.isArray(rows)) {
-        setSubmissions(rows);
-      }
-    } catch (_) {
-    } finally {
-      setLoadingData(false);
+    },
+    [
+      token,
+      currentPage,
+      pageSize,
+      courseFilter,
+      quizFilter,
+      classFilter,
+      statusFilter,
+      violationFilter,
+      debouncedSearch,
+      sortKey,
+      handleLogout,
+    ]
+  );
+
+  // Helper ambil seluruh data terfilter khusus saat klik Export CSV / Export JSON
+  const fetchAllFilteredForExport = useCallback(async () => {
+    const params = new URLSearchParams({
+      export: 'true',
+      course: courseFilter,
+      quizId: quizFilter,
+      kelas: classFilter,
+      status: statusFilter,
+      violation: violationFilter,
+      search: debouncedSearch || searchQuery.trim(),
+      sort: sortKey,
+    });
+    const res = await fetch(`${API_BASE}/v1/admin/submissions?${params.toString()}`, {
+      headers: getAuthHeaders(token),
+    });
+    if (res.status === 401) {
+      handleLogout();
+      return [];
     }
-  }, [token, handleLogout]);
+    const data = await res.json();
+    return Array.isArray(data.data) ? data.data : [];
+  }, [
+    token,
+    courseFilter,
+    quizFilter,
+    classFilter,
+    statusFilter,
+    violationFilter,
+    debouncedSearch,
+    searchQuery,
+    sortKey,
+    handleLogout,
+  ]);
+
+  // Lazy-load detail lengkap submission (question_order, question_timings, activity_log) dari PK (< 2ms)
+  const loadSubmissionDetail = useCallback(
+    async (subId) => {
+      if (detailCacheRef.current[subId]) {
+        return detailCacheRef.current[subId];
+      }
+      try {
+        const res = await fetch(`${API_BASE}/v1/admin/submissions/${subId}`, {
+          headers: getAuthHeaders(token),
+        });
+        const data = await res.json();
+        if (res.ok && data.data) {
+          detailCacheRef.current[subId] = data.data;
+          return data.data;
+        }
+      } catch (_) {}
+      return null;
+    },
+    [token]
+  );
+
+  const handleOpenAnswerModal = useCallback(
+    async (sub, entries) => {
+      const cached = detailCacheRef.current[sub.id];
+      setAnswerModal({
+        sub: cached ? { ...sub, ...cached } : sub,
+        entries,
+      });
+      if (!cached) {
+        const detail = await loadSubmissionDetail(sub.id);
+        if (detail) {
+          setAnswerModal((prev) =>
+            prev && prev.sub && prev.sub.id === sub.id
+              ? { ...prev, sub: { ...prev.sub, ...detail } }
+              : prev
+          );
+        }
+      }
+    },
+    [loadSubmissionDetail]
+  );
+
+  const handleOpenTimingModal = useCallback(
+    async (s) => {
+      const cached = detailCacheRef.current[s.id];
+      const buildSessionView = (detailObj) => ({
+        nama: s.nama,
+        studentName: s.nama,
+        nim: s.nim,
+        quizId: s.quiz_id,
+        status: s.status || 'SUBMITTED',
+        questionTimings: Array.isArray(detailObj?.question_timings) ? detailObj.question_timings : [],
+        activityLog: Array.isArray(detailObj?.activity_log) ? detailObj.activity_log : [],
+        totalElapsedSeconds: Number(s.duration_seconds) || 0,
+        remainingSeconds: 0,
+        violationCount: s.violation_count || 0,
+        submittedAt: s.submitted_at,
+      });
+
+      setLiveDetailModal(buildSessionView(cached || s));
+      if (!cached) {
+        const detail = await loadSubmissionDetail(s.id);
+        if (detail) {
+          setLiveDetailModal(buildSessionView(detail));
+        }
+      }
+    },
+    [loadSubmissionDetail]
+  );
 
   const fetchLiveSessions = useCallback(async () => {
     if (!token || (role !== 'SUPERADMIN' && role !== 'PROCTOR')) return;
@@ -166,11 +332,23 @@ export function AdminDashboardPage() {
   useEffect(() => {
     if (!token) return;
     fetchQuizList();
-    fetchSubmissions();
     if (role === 'SUPERADMIN' || role === 'PROCTOR') {
       fetchLiveSessions();
     }
-  }, [token, role, fetchQuizList, fetchSubmissions, fetchLiveSessions]);
+  }, [token, role, fetchQuizList, fetchLiveSessions]);
+
+  // Fetch terpaginasi otomatis saat halaman/filter berubah (dengan AbortController anti-race-condition)
+  useEffect(() => {
+    if (!token) return;
+    const controller = new AbortController();
+    fetchSubmissions(controller.signal);
+    return () => controller.abort();
+  }, [token, fetchSubmissions]);
+
+  // Bersihkan pilihan checkbox saat berpindah halaman atau mengganti filter
+  useEffect(() => {
+    setSelectedIds([]);
+  }, [currentPage, pageSize, courseFilter, quizFilter, classFilter, statusFilter, violationFilter, debouncedSearch, sortKey]);
 
   // Sinkronisasi data live hanya saat berpindah ke tab LIVE (tanpa polling otomatis berulang di background)
   useEffect(() => {
@@ -216,19 +394,84 @@ export function AdminDashboardPage() {
     [token, showToast]
   );
 
-  // Hitung jumlah data per mata kuliah
-  const courseCounts = useMemo(() => {
-    let ppk = 0;
-    let iot = 0;
-    let algo = 0;
-    submissions.forEach((s) => {
-      const mk = String(s.mata_kuliah || '').toUpperCase();
-      if (mk.includes('IOT')) iot++;
-      else if (mk.includes('ALGO')) algo++;
-      else ppk++;
+  // Hapus 1 submission (misal pengerjaan mahasiswa yang asal-asalan)
+  const handleDeleteSubmission = useCallback(
+    async (sub) => {
+      const confirmMsg = `Hapus submission mahasiswa berikut?\n\n• Nama: ${sub.nama || '-'}\n• NIM: ${sub.nim || '-'}\n• Quiz ID: #${sub.quiz_id}\n\nData pengerjaan ini akan dihapus permanen dari database (dan mahasiswa dapat mengerjakan ulang apabila belum ada submission lain).`;
+      if (!window.confirm(confirmMsg)) return;
+
+      try {
+        const res = await fetch(`${API_BASE}/v1/admin/submissions/${sub.id}`, {
+          method: 'DELETE',
+          headers: getAuthHeaders(token),
+        });
+        const data = await res.json();
+        if (res.ok && data.status === 'success') {
+          delete detailCacheRef.current[sub.id];
+          setSelectedIds((prev) => prev.filter((id) => id !== sub.id));
+          showToast(`🗑️ ${data.message}`, 'success');
+          await fetchSubmissions();
+        } else {
+          showToast(data.message || 'Gagal menghapus submission', 'error');
+        }
+      } catch (err) {
+        showToast('Gagal menghapus submission: ' + err.message, 'error');
+      }
+    },
+    [token, showToast, fetchSubmissions]
+  );
+
+  // Pilih / batal pilih 1 baris
+  const handleToggleSelect = useCallback((subId) => {
+    setSelectedIds((prev) =>
+      prev.includes(subId) ? prev.filter((id) => id !== subId) : [...prev, subId]
+    );
+  }, []);
+
+  // Pilih / batal pilih seluruh baris di halaman aktif
+  const handleToggleSelectAllPage = useCallback(() => {
+    const pageIds = submissions.map((s) => s.id);
+    setSelectedIds((prev) => {
+      const allSelected = pageIds.length > 0 && pageIds.every((id) => prev.includes(id));
+      if (allSelected) {
+        return prev.filter((id) => !pageIds.includes(id));
+      }
+      return [...new Set([...prev, ...pageIds])];
     });
-    return { ppk, iot, algo, total: submissions.length };
   }, [submissions]);
+
+  // Hapus banyak submission sekaligus (Bulk Delete)
+  const handleBulkDelete = useCallback(async () => {
+    if (selectedIds.length === 0 || bulkDeleting) return;
+    const confirmMsg = `Hapus ${selectedIds.length} submission mahasiswa yang dipilih sekaligus?\n\nData yang dihapus tidak dapat dikembalikan.`;
+    if (!window.confirm(confirmMsg)) return;
+
+    setBulkDeleting(true);
+    try {
+      const res = await fetch(`${API_BASE}/v1/admin/submissions/bulk-delete`, {
+        method: 'POST',
+        headers: getAuthHeaders(token),
+        body: JSON.stringify({ ids: selectedIds }),
+      });
+      const data = await res.json();
+      if (res.ok && data.status === 'success') {
+        selectedIds.forEach((id) => delete detailCacheRef.current[id]);
+        setSelectedIds([]);
+        showToast(`🗑️ ${data.message}`, 'success');
+        await fetchSubmissions();
+      } else {
+        showToast(data.message || 'Gagal menghapus submission terpilih', 'error');
+      }
+    } catch (err) {
+      showToast('Kesalahan jaringan: ' + err.message, 'error');
+    } finally {
+      setBulkDeleting(false);
+    }
+  }, [selectedIds, bulkDeleting, token, showToast, fetchSubmissions]);
+
+  // Statistik per mata kuliah & per kelas dari Server-Side Meta (tanpa memuat seluruh baris ke browser)
+  const courseCounts = serverMeta.courseCounts || { ppk: 0, iot: 0, algo: 0, total: 0 };
+  const classCounts = serverMeta.classCounts || { A: 0, B: 0, C: 0, D: 0 };
 
   // Filter daftar kuis sesuai mata kuliah yang sedang aktif
   const filteredQuizList = useMemo(() => {
@@ -243,130 +486,12 @@ export function AdminDashboardPage() {
     });
   }, [quizList, courseFilter]);
 
-  // Memoized Filtered Submissions (dengan pemisahan mata kuliah)
-  const filteredSubmissions = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    const list = submissions.filter((sub) => {
-      // 1. Filter Mata Kuliah (PPK vs IoT vs Algoritma Evolusioner)
-      if (courseFilter !== 'ALL') {
-        const subCourse = String(sub.mata_kuliah || '').toUpperCase();
-        if (courseFilter === 'IOT' && !subCourse.includes('IOT')) return false;
-        if (courseFilter === 'PPK' && !subCourse.includes('PPK') && !subCourse.includes('PERANGKAT KERAS')) return false;
-        if (courseFilter === 'ALGO' && !subCourse.includes('ALGO') && !subCourse.includes('EVOLUSIONER')) return false;
-      }
-      if (quizFilter !== 'ALL' && String(sub.quiz_id) !== String(quizFilter)) {
-        return false;
-      }
-      if (classFilter !== 'ALL') {
-        const subClass = String(sub.kelas || '').trim().toUpperCase();
-        if (subClass !== classFilter) return false;
-      }
-      if (statusFilter !== 'ALL') {
-        if (
-          statusFilter === 'COMPLETED' &&
-          sub.status !== 'COMPLETED' &&
-          sub.status !== 'SUBMITTED_MANUALLY' &&
-          sub.status !== 'SUBMITTED'
-        ) {
-          return false;
-        }
-        if (statusFilter === 'DISQUALIFIED' && sub.status !== 'DISQUALIFIED') {
-          return false;
-        }
-        if (statusFilter === 'TIME_EXPIRED' && sub.status !== 'TIME_EXPIRED') {
-          return false;
-        }
-      }
-      if (violationFilter !== 'ALL') {
-        const v = Number(sub.violation_count) || 0;
-        const maxV = Number(sub.max_violations) || 3;
-        if (violationFilter === 'CLEAN' && v > 0) return false;
-        if (violationFilter === 'HAS_VIOLATION' && v === 0) return false;
-        if (
-          violationFilter === 'MAX_VIOLATION' &&
-          v < maxV &&
-          sub.status !== 'DISQUALIFIED'
-        ) {
-          return false;
-        }
-      }
-      if (q) {
-        const matchName = (sub.nama || '').toLowerCase().includes(q);
-        const matchNim = (sub.nim || '').toLowerCase().includes(q);
-        if (!matchName && !matchNim) return false;
-      }
-      return true;
-    });
-
-    list.sort((a, b) => {
-      switch (sortKey) {
-        case 'submitted_at-asc':
-          return new Date(a.submitted_at || 0) - new Date(b.submitted_at || 0);
-        case 'submitted_at-desc':
-          return new Date(b.submitted_at || 0) - new Date(a.submitted_at || 0);
-        case 'grade-desc':
-          return (Number(b.grade) || 0) - (Number(a.grade) || 0);
-        case 'grade-asc':
-          return (Number(a.grade) || 0) - (Number(b.grade) || 0);
-        case 'nama-asc':
-          return (a.nama || '').localeCompare(b.nama || '');
-        case 'nama-desc':
-          return (b.nama || '').localeCompare(a.nama || '');
-        case 'nim-asc':
-          return String(a.nim || '').localeCompare(String(b.nim || ''), undefined, {
-            numeric: true,
-          });
-        case 'nim-desc':
-          return String(b.nim || '').localeCompare(String(a.nim || ''), undefined, {
-            numeric: true,
-          });
-        case 'violation_count-desc':
-          return (Number(b.violation_count) || 0) - (Number(a.violation_count) || 0);
-        case 'violation_count-asc':
-          return (Number(a.violation_count) || 0) - (Number(b.violation_count) || 0);
-        default:
-          return new Date(b.submitted_at || 0) - new Date(a.submitted_at || 0);
-      }
-    });
-
-    return list;
-  }, [
-    submissions,
-    courseFilter,
-    quizFilter,
-    classFilter,
-    statusFilter,
-    violationFilter,
-    searchQuery,
-    sortKey,
-  ]);
-
-  // Hitung jumlah mahasiswa per kelas secara dinamis sesuai filter yang dipilih
-  const classCounts = useMemo(() => {
-    const counts = { A: 0, B: 0, C: 0, D: 0 };
-    filteredSubmissions.forEach((s) => {
-      const k = String(s.kelas || '').trim().toUpperCase();
-      if (counts[k] !== undefined) counts[k]++;
-    });
-    return counts;
-  }, [filteredSubmissions]);
-
-  // Auto-reset halaman ke-1 saat filter berubah
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [courseFilter, quizFilter, classFilter, statusFilter, violationFilter, searchQuery, sortKey]);
-
-  // Paginasi Data Submissions (Menjaga performa tetap sub-millisecond)
-  const totalItems = filteredSubmissions.length;
-  const numericPageSize = pageSize === 'ALL' ? totalItems || 1 : Number(pageSize) || 25;
-  const totalPages = Math.max(1, Math.ceil(totalItems / numericPageSize));
+  // Paginasi Server-Side (submissions hanya berisi baris halaman aktif sesuai LIMIT/OFFSET!)
+  const totalItems = serverMeta.totalFiltered || 0;
+  const numericPageSize = pageSize === 'ALL' ? 500 : Number(pageSize) || 25;
+  const totalPages = Math.max(1, serverMeta.totalPages || Math.ceil(totalItems / numericPageSize) || 1);
   const safeCurrentPage = Math.min(Math.max(1, currentPage), totalPages);
-
-  const paginatedSubmissions = useMemo(() => {
-    if (pageSize === 'ALL') return filteredSubmissions;
-    const start = (safeCurrentPage - 1) * numericPageSize;
-    return filteredSubmissions.slice(start, start + numericPageSize);
-  }, [filteredSubmissions, safeCurrentPage, pageSize, numericPageSize]);
+  const paginatedSubmissions = submissions;
 
   // Memoized Filtered Live Sessions (dengan pemisahan mata kuliah)
   const filteredLiveSessions = useMemo(() => {
@@ -394,25 +519,20 @@ export function AdminDashboardPage() {
     });
   }, [liveSessions, courseFilter, quizFilter, classFilter, searchQuery]);
 
-  // Summary Stats
+  // Summary Stats (Server-Side Agregasi Cepat)
   const stats = useMemo(() => {
-    const total = filteredSubmissions.length;
-    const graded = filteredSubmissions.filter(
-      (s) => s.grade !== null && s.grade !== undefined && s.grade !== ''
-    );
-    const avg =
-      graded.length > 0
-        ? (
-            graded.reduce((acc, cur) => acc + Number(cur.grade || 0), 0) /
-            graded.length
-          ).toFixed(1)
-        : '-';
-    // Hanya hitung mahasiswa yang statusnya ACTIVE dan belum diskualifikasi/selesai
     const activeOnline = filteredLiveSessions.filter(
       (s) => s.status === 'ACTIVE'
     ).length;
-    return { total, gradedCount: graded.length, avg, activeOnline };
-  }, [filteredSubmissions, filteredLiveSessions]);
+    return {
+      total: serverMeta.totalFiltered || 0,
+      totalAll: serverMeta.totalAll || 0,
+      gradedCount: serverMeta.gradedCount || 0,
+      ungradedCount: serverMeta.ungradedCount || 0,
+      avg: serverMeta.avgGrade || '-',
+      activeOnline,
+    };
+  }, [serverMeta, filteredLiveSessions]);
 
   const handleAutoGradeSingle = useCallback(
     async (submissionId) => {
@@ -456,23 +576,21 @@ export function AdminDashboardPage() {
       return;
     }
 
-    const ungradeds = filteredSubmissions.filter(
-      (s) => s.grade === null || s.grade === undefined || s.grade === ''
-    );
-    if (ungradeds.length === 0) {
+    const ungradedTotal = serverMeta.ungradedCount || 0;
+    if (ungradedTotal === 0) {
       showToast(
-        `Semua mahasiswa pada Quiz #${quizFilter} sudah memiliki nilai.`,
+        `Semua mahasiswa pada filter Quiz #${quizFilter} sudah memiliki nilai.`,
         'info'
       );
       return;
     }
 
-    const confirmMsg = `Jalankan Auto-Grading Gemini AI untuk ${ungradeds.length} submission yang belum dinilai pada Quiz #${quizFilter}?\nNilai dan catatan dosen akan otomatis terisi berdasarkan rubrik dosen.`;
+    const confirmMsg = `Jalankan Auto-Grading Gemini AI untuk submission yang belum dinilai pada Quiz #${quizFilter} (ditemukan ${ungradedTotal} belum dinilai, diproses maks 50 per kloter)?\nNilai dan catatan dosen akan otomatis terisi berdasarkan rubrik dosen.`;
     if (!window.confirm(confirmMsg)) return;
 
     setAutoGradeLoading(true);
     showToast(
-      `⏳ Sedang mengevaluasi ${ungradeds.length} jawaban dengan Gemini AI...`,
+      `⏳ Sedang mengevaluasi jawaban dengan Gemini AI...`,
       'info'
     );
     try {
@@ -493,20 +611,25 @@ export function AdminDashboardPage() {
     } finally {
       setAutoGradeLoading(false);
     }
-  }, [quizFilter, filteredSubmissions, token, fetchSubmissions, showToast]);
+  }, [quizFilter, serverMeta.ungradedCount, token, fetchSubmissions, showToast]);
 
   const handleExportCSV = async () => {
-    if (filteredSubmissions.length === 0) {
+    if ((serverMeta.totalFiltered || 0) === 0 && submissions.length === 0) {
       showToast('Tidak ada data submission untuk diekspor', 'error');
       return;
     }
 
-    showToast('⏳ Mempersiapkan data ekspor & definisi soal...', 'info');
+    showToast('⏳ Mempersiapkan data ekspor & definisi soal dari database...', 'info');
+    const exportRows = await fetchAllFilteredForExport();
+    if (exportRows.length === 0) {
+      showToast('Tidak ada data submission untuk diekspor', 'error');
+      return;
+    }
 
     // 1. Ambil daftar teks pertanyaan untuk seluruh Quiz ID yang terlibat
     const uniqueQuizIds = [
       ...new Set(
-        filteredSubmissions
+        exportRows
           .map((s) => String(s.quiz_id || '').trim())
           .filter(Boolean)
       ),
@@ -529,7 +652,7 @@ export function AdminDashboardPage() {
 
     // 2. Tentukan jumlah soal terbanyak dari submission yang ada
     let maxQ = 0;
-    filteredSubmissions.forEach((s) => {
+    exportRows.forEach((s) => {
       const qList = quizQuestionMap[String(s.quiz_id || '').trim()] || [];
       if (qList.length > maxQ) maxQ = qList.length;
 
@@ -577,7 +700,7 @@ export function AdminDashboardPage() {
     };
 
     // 4. Susun Baris Data Mahasiswa, Soal, & Jawaban
-    const rows = filteredSubmissions.map((s, idx) => {
+    const rows = exportRows.map((s, idx) => {
       const ansObj = parseAnswersObject(s.answers);
       let qList = quizQuestionMap[String(s.quiz_id || '').trim()] || [];
       if (Array.isArray(s.question_order) && s.question_order.length > 0) {
@@ -664,21 +787,26 @@ export function AdminDashboardPage() {
     a.download = `Rekap_Lengkap_Jawaban${courseStr}_${quizName}${classStr}_${dateStr}.csv`;
     a.click();
     URL.revokeObjectURL(url);
-    showToast(`Berhasil mengekspor ${filteredSubmissions.length} jawaban mahasiswa!`, 'success');
+    showToast(`Berhasil mengekspor ${exportRows.length} jawaban mahasiswa!`, 'success');
   };
 
   const handleExportJSON = async () => {
-    if (filteredSubmissions.length === 0) {
+    if ((serverMeta.totalFiltered || 0) === 0 && submissions.length === 0) {
       showToast('Tidak ada data submission untuk diekspor', 'error');
       return;
     }
 
-    showToast('⏳ Mempersiapkan data JSON untuk AI...', 'info');
+    showToast('⏳ Mempersiapkan data JSON untuk AI dari database...', 'info');
+    const exportRows = await fetchAllFilteredForExport();
+    if (exportRows.length === 0) {
+      showToast('Tidak ada data submission untuk diekspor', 'error');
+      return;
+    }
 
     // 1. Ambil seluruh data soal & kunci jawaban untuk Quiz ID yang terlibat
     const uniqueQuizIds = [
       ...new Set(
-        filteredSubmissions
+        exportRows
           .map((s) => String(s.quiz_id || '').trim())
           .filter(Boolean)
       ),
@@ -707,10 +835,10 @@ export function AdminDashboardPage() {
         mata_kuliah: courseFilter,
         quiz_id: quizFilter,
         kelas_filter: classFilter,
-        total_mahasiswa: filteredSubmissions.length,
+        total_mahasiswa: exportRows.length,
       },
       daftar_soal_per_quiz: quizQuestionMap,
-      submissions: filteredSubmissions.map((s, idx) => {
+      submissions: exportRows.map((s, idx) => {
         const ansObj = parseAnswersObject(s.answers);
         let qList = quizQuestionMap[String(s.quiz_id || '').trim()] || [];
         if (Array.isArray(s.question_order) && s.question_order.length > 0) {
@@ -783,7 +911,7 @@ export function AdminDashboardPage() {
     a.download = `Rekap_AI${courseStr}_${quizName}${classStr}_${dateStr}.json`;
     a.click();
     URL.revokeObjectURL(url);
-    showToast(`Berhasil mengekspor format JSON untuk AI (${filteredSubmissions.length} data)!`, 'success');
+    showToast(`Berhasil mengekspor format JSON untuk AI (${exportRows.length} data)!`, 'success');
   };
 
   if (!token) {
@@ -872,7 +1000,7 @@ export function AdminDashboardPage() {
             className={`nav-tab ${activeTab === 'SUBMISSIONS' ? 'active' : ''}`}
             onClick={() => setActiveTab('SUBMISSIONS')}
           >
-            📊 Hasil & Penilaian ({submissions.length})
+            📊 Hasil & Penilaian ({stats.totalAll})
           </button>
           {(role === 'SUPERADMIN' || role === 'PROCTOR') && (
             <button
@@ -934,7 +1062,7 @@ export function AdminDashboardPage() {
             <button
               type="button"
               className={`btn btn-xs btn-touchable ${courseFilter === 'ALL' ? 'btn-primary' : 'btn-outline'}`}
-              onClick={() => { setCourseFilter('ALL'); setQuizFilter('ALL'); }}
+              onClick={() => { setCourseFilter('ALL'); setQuizFilter('ALL'); setCurrentPage(1); }}
               style={{ padding: '6px 12px', borderRadius: 8, fontWeight: 700 }}
             >
               🌐 Semua Mata Kuliah ({courseCounts.total})
@@ -942,7 +1070,7 @@ export function AdminDashboardPage() {
             <button
               type="button"
               className={`btn btn-xs btn-touchable ${courseFilter === 'PPK' ? 'btn-primary' : 'btn-outline'}`}
-              onClick={() => { setCourseFilter('PPK'); setQuizFilter('ALL'); }}
+              onClick={() => { setCourseFilter('PPK'); setQuizFilter('ALL'); setCurrentPage(1); }}
               style={{
                 padding: '6px 12px',
                 borderRadius: 8,
@@ -957,7 +1085,7 @@ export function AdminDashboardPage() {
             <button
               type="button"
               className={`btn btn-xs btn-touchable ${courseFilter === 'IOT' ? 'btn-primary' : 'btn-outline'}`}
-              onClick={() => { setCourseFilter('IOT'); setQuizFilter('ALL'); }}
+              onClick={() => { setCourseFilter('IOT'); setQuizFilter('ALL'); setCurrentPage(1); }}
               style={{
                 padding: '6px 12px',
                 borderRadius: 8,
@@ -972,7 +1100,7 @@ export function AdminDashboardPage() {
             <button
               type="button"
               className={`btn btn-xs btn-touchable ${courseFilter === 'ALGO' ? 'btn-primary' : 'btn-outline'}`}
-              onClick={() => { setCourseFilter('ALGO'); setQuizFilter('ALL'); }}
+              onClick={() => { setCourseFilter('ALGO'); setQuizFilter('ALL'); setCurrentPage(1); }}
               style={{
                 padding: '6px 12px',
                 borderRadius: 8,
@@ -1000,7 +1128,7 @@ export function AdminDashboardPage() {
             <select
               className="filter-select"
               value={quizFilter}
-              onChange={(e) => setQuizFilter(e.target.value)}
+              onChange={(e) => { setQuizFilter(e.target.value); setCurrentPage(1); }}
             >
               <option value="ALL">📚 Semua Quiz ID</option>
               {filteredQuizList.map((q) => (
@@ -1013,7 +1141,7 @@ export function AdminDashboardPage() {
             <select
               className="filter-select"
               value={classFilter}
-              onChange={(e) => setClassFilter(e.target.value)}
+              onChange={(e) => { setClassFilter(e.target.value); setCurrentPage(1); }}
             >
               <option value="ALL">🏫 Semua Kelas</option>
               <option value="A">Kelas A ({classCounts.A} mhs)</option>
@@ -1027,7 +1155,7 @@ export function AdminDashboardPage() {
                 <select
                   className="filter-select"
                   value={statusFilter}
-                  onChange={(e) => setStatusFilter(e.target.value)}
+                  onChange={(e) => { setStatusFilter(e.target.value); setCurrentPage(1); }}
                 >
                   <option value="ALL">📌 Semua Status Ujian</option>
                   <option value="COMPLETED">✅ Selesai Mandiri</option>
@@ -1038,7 +1166,7 @@ export function AdminDashboardPage() {
                 <select
                   className="filter-select"
                   value={violationFilter}
-                  onChange={(e) => setViolationFilter(e.target.value)}
+                  onChange={(e) => { setViolationFilter(e.target.value); setCurrentPage(1); }}
                 >
                   <option value="ALL">⚠️ Semua Pelanggaran</option>
                   <option value="CLEAN">🛡️ Bersih (0 Pelanggaran)</option>
@@ -1060,12 +1188,14 @@ export function AdminDashboardPage() {
                 className="btn btn-outline btn-sm btn-touchable"
                 onClick={() => {
                   setSearchQuery('');
+                  setDebouncedSearch('');
                   setCourseFilter('ALL');
                   setQuizFilter('ALL');
                   setClassFilter('ALL');
                   setStatusFilter('ALL');
                   setViolationFilter('ALL');
                   setSortKey('submitted_at-desc');
+                  setCurrentPage(1);
                 }}
               >
                 ↺ Reset Filter
@@ -1092,7 +1222,7 @@ export function AdminDashboardPage() {
                 Menampilkan <strong style={{ color: '#0f172a' }}>
                   {totalItems === 0 ? 0 : (safeCurrentPage - 1) * numericPageSize + 1} - {Math.min(safeCurrentPage * numericPageSize, totalItems)}
                 </strong>{' '}
-                (Hal. <strong>{safeCurrentPage}</strong> dari <strong>{totalPages}</strong>) dari total <strong style={{ color: '#0f172a' }}>{totalItems}</strong> data terfilter ({submissions.length} total sistem).
+                (Hal. <strong>{safeCurrentPage}</strong> dari <strong>{totalPages}</strong>) dari total <strong style={{ color: '#0f172a' }}>{totalItems}</strong> data terfilter ({stats.totalAll} total sistem).
                 <span style={{ marginLeft: 12, padding: '2px 8px', background: '#f1f5f9', borderRadius: 6, fontWeight: 700 }}>
                   Rata-rata Nilai: <strong style={{ color: '#4f46e5' }}>{stats.avg}</strong>
                 </span>
@@ -1113,7 +1243,7 @@ export function AdminDashboardPage() {
                     className="filter-select"
                     style={{ padding: '5px 10px', fontSize: '0.8rem' }}
                     value={sortKey}
-                    onChange={(e) => setSortKey(e.target.value)}
+                    onChange={(e) => { setSortKey(e.target.value); setCurrentPage(1); }}
                   >
                     <option value="submitted_at-desc">Waktu Submit (Terbaru)</option>
                     <option value="submitted_at-asc">Waktu Submit (Terlama)</option>
@@ -1130,10 +1260,23 @@ export function AdminDashboardPage() {
 
               {activeTab === 'SUBMISSIONS' ? (
                 <>
+                  {(role === 'SUPERADMIN' || role === 'DOSEN') && selectedIds.length > 0 && (
+                    <button
+                      type="button"
+                      className="btn btn-danger btn-sm btn-touchable"
+                      style={{ fontWeight: 800 }}
+                      onClick={handleBulkDelete}
+                      disabled={bulkDeleting}
+                      title="Hapus seluruh submission mahasiswa yang dicentang"
+                    >
+                      {bulkDeleting ? '⏳ Menghapus...' : `🗑️ Hapus Terpilih (${selectedIds.length})`}
+                    </button>
+                  )}
+
                   <button
                     type="button"
                     className="btn btn-outline btn-sm btn-touchable"
-                    onClick={fetchSubmissions}
+                    onClick={() => fetchSubmissions()}
                   >
                     🔄 Refresh
                   </button>
@@ -1209,25 +1352,45 @@ export function AdminDashboardPage() {
             <table className="data-table">
               <thead>
                 <tr>
+                  {(role === 'SUPERADMIN' || role === 'DOSEN') && (
+                    <th className="no-print" style={{ width: 38, textAlign: 'center' }}>
+                      <input
+                        type="checkbox"
+                        checked={
+                          paginatedSubmissions.length > 0 &&
+                          paginatedSubmissions.every((s) => selectedIds.includes(s.id))
+                        }
+                        onChange={handleToggleSelectAllPage}
+                        style={{ width: 16, height: 16, cursor: 'pointer', accentColor: '#dc2626' }}
+                        title="Pilih / batal pilih semua baris pada halaman ini"
+                      />
+                    </th>
+                  )}
                   <th style={{ width: 48, textAlign: 'center' }}>No.</th>
                   <th>Mahasiswa & Quiz</th>
                   <th>Waktu Submit</th>
                   <th>Integritas / Kecurangan</th>
                   <th>Ringkasan Jawaban</th>
                   <th>Status & Nilai</th>
-                  {role !== 'PROCTOR' && <th className="no-print">Penilaian Cepat</th>}
+                  {role !== 'PROCTOR' && <th className="no-print">Penilaian & Aksi</th>}
                 </tr>
               </thead>
               <tbody>
                 {loadingData ? (
                   <tr>
-                    <td colSpan={role !== 'PROCTOR' ? 7 : 6} className="empty-state">
+                    <td
+                      colSpan={role !== 'PROCTOR' ? 8 : 6}
+                      className="empty-state"
+                    >
                       ⏳ Memuat data jawaban mahasiswa...
                     </td>
                   </tr>
-                ) : filteredSubmissions.length === 0 ? (
+                ) : paginatedSubmissions.length === 0 ? (
                   <tr>
-                    <td colSpan={role !== 'PROCTOR' ? 7 : 6} className="empty-state">
+                    <td
+                      colSpan={role !== 'PROCTOR' ? 8 : 6}
+                      className="empty-state"
+                    >
                       Tidak ada data pengerjaan yang sesuai filter.
                     </td>
                   </tr>
@@ -1235,43 +1398,25 @@ export function AdminDashboardPage() {
                   paginatedSubmissions.map((sub, idx) => (
                     <SubmissionRow
                       key={sub.id}
-                      index={(safeCurrentPage - 1) * (pageSize === 'ALL' ? 0 : Number(pageSize)) + idx}
+                      index={(safeCurrentPage - 1) * numericPageSize + idx}
                       sub={sub}
                       role={role}
+                      isSelected={selectedIds.includes(sub.id)}
+                      onToggleSelect={
+                        role === 'SUPERADMIN' || role === 'DOSEN'
+                          ? handleToggleSelect
+                          : undefined
+                      }
                       onSaveGrade={handleSaveGrade}
                       onAutoGrade={role !== 'PROCTOR' ? handleAutoGradeSingle : undefined}
-                      onOpenAnswerModal={(s, entries) =>
-                        setAnswerModal({ sub: s, entries })
+                      onDelete={
+                        role === 'SUPERADMIN' || role === 'DOSEN'
+                          ? handleDeleteSubmission
+                          : undefined
                       }
+                      onOpenAnswerModal={handleOpenAnswerModal}
                       onOpenViolationModal={(s) => setViolationModal(s)}
-                      onOpenTimingModal={(s) => {
-                        const parseJson = (val) => {
-                          if (!val) return [];
-                          if (Array.isArray(val)) return val;
-                          if (typeof val === 'string') {
-                            try {
-                              const p = JSON.parse(val);
-                              return Array.isArray(p) ? p : [];
-                            } catch (_) {
-                              return [];
-                            }
-                          }
-                          return [];
-                        };
-                        setLiveDetailModal({
-                          nama: s.nama,
-                          studentName: s.nama,
-                          nim: s.nim,
-                          quizId: s.quiz_id,
-                          status: s.status || 'SUBMITTED',
-                          questionTimings: parseJson(s.question_timings),
-                          activityLog: parseJson(s.activity_log),
-                          totalElapsedSeconds: Number(s.duration_seconds) || 0,
-                          remainingSeconds: 0,
-                          violationCount: s.violation_count || 0,
-                          submittedAt: s.submitted_at,
-                        });
-                      }}
+                      onOpenTimingModal={handleOpenTimingModal}
                     />
                   ))
                 )}
@@ -1393,7 +1538,7 @@ export function AdminDashboardPage() {
                 <option value={25}>25 baris</option>
                 <option value={50}>50 baris</option>
                 <option value={100}>100 baris</option>
-                <option value="ALL">Semua ({totalItems})</option>
+                <option value="ALL">Maks 500 baris</option>
               </select>
             </div>
           </div>
@@ -1471,7 +1616,7 @@ export function AdminDashboardPage() {
         isOpen={importModalOpen}
         onClose={() => setImportModalOpen(false)}
         token={token}
-        onSuccess={fetchSubmissions}
+        onSuccess={() => fetchSubmissions()}
         showToast={showToast}
       />
 
