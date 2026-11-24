@@ -307,6 +307,50 @@ function detectClientBrowser(ua = '') {
   return { allowed: false, name: 'Unknown Browser' };
 }
 
+// ---------------------------------------------------------------
+// ALGORITMA SAMPLING & SHUFFLE DETERMINISTIK BERBASIS NIM MAHASISWA
+// Menjamin tiap mahasiswa mendapat variasi soal acak, namun jika refresh
+// soal yang didapat tetap sama persis (konsisten & anti-error)
+// ---------------------------------------------------------------
+function seededRandom(seedStr) {
+  let h = 1779033703 ^ seedStr.length;
+  for (let i = 0; i < seedStr.length; i++) {
+    h = Math.imul(h ^ seedStr.charCodeAt(i), 3432918353);
+    h = (h << 13) | (h >>> 19);
+  }
+  return function() {
+    h = Math.imul(h ^ (h >>> 16), 2246822507);
+    h = Math.imul(h ^ (h >>> 13), 3266489909);
+    return ((h ^= h >>> 16) >>> 0) / 4294967296;
+  };
+}
+
+function getAssignedQuestionsForStudent(allQuestions, nim, quizId, attempt = 1, questionCount = 0, shuffle = false) {
+  if (!Array.isArray(allQuestions) || allQuestions.length === 0) return [];
+  const labeled = allQuestions.map((q, idx) => ({ ...q, original_number: idx + 1 }));
+
+  const targetCount = (Number(questionCount) > 0 && Number(questionCount) < labeled.length)
+    ? Number(questionCount)
+    : labeled.length;
+
+  if (!shuffle && targetCount === labeled.length) {
+    return labeled;
+  }
+
+  // Jika shuffle aktif ATAU targetCount < total soal di bank soal, lakukan pengacakan deterministik
+  const cleanSeed = `${String(nim || 'default').trim()}_${String(quizId || 'quiz').trim()}_att${attempt || 1}`;
+  const rng = seededRandom(cleanSeed);
+  let pool = [...labeled];
+
+  // Fisher-Yates shuffle dengan generator deterministik
+  for (let i = pool.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [pool[i], pool[j]] = [pool[j], pool[i]];
+  }
+
+  return pool.slice(0, targetCount);
+}
+
 // Mitigasi DoS / OOM: Batasi kapasitas map in-memory
 function enforceLiveSessionsLimit() {
   if (liveStudentSessions.size < MAX_LIVE_SESSIONS) return;
@@ -540,6 +584,20 @@ async function initDbTables() {
       ADD COLUMN IF NOT EXISTS mata_kuliah VARCHAR(100) DEFAULT 'PPK';
     `);
 
+    // Kolom Bank Soal & Random Shuffle per Mahasiswa
+    await db.query(`
+      ALTER TABLE quiz_settings 
+      ADD COLUMN IF NOT EXISTS question_count INT DEFAULT 0;
+    `);
+    await db.query(`
+      ALTER TABLE quiz_settings 
+      ADD COLUMN IF NOT EXISTS shuffle_questions BOOLEAN DEFAULT FALSE;
+    `);
+    await db.query(`
+      ALTER TABLE quiz_submissions 
+      ADD COLUMN IF NOT EXISTS question_order JSONB;
+    `);
+
     // 4. Buat tabel master data mahasiswa & enrollment kelas mata kuliah
     await db.query(`
       CREATE TABLE IF NOT EXISTS quiz_students (
@@ -701,7 +759,9 @@ app.get('/v1/quiz/settings/:quizId', async (req, res) => {
               COALESCE(target_lng, 110.443800) AS target_lng,
               COALESCE(target_radius_meters, 450) AS target_radius_meters,
               COALESCE(target_location_name, 'Fakultas Sains dan Matematika (FSM) Undip') AS target_location_name,
-              COALESCE(mata_kuliah, 'PPK') AS mata_kuliah
+              COALESCE(mata_kuliah, 'PPK') AS mata_kuliah,
+              COALESCE(question_count, 0) AS question_count,
+              COALESCE(shuffle_questions, FALSE) AS shuffle_questions
        FROM quiz_settings 
        WHERE quiz_id = $1`,
       [cleanQuizId]
@@ -722,6 +782,8 @@ app.get('/v1/quiz/settings/:quizId', async (req, res) => {
     let targetRadiusMeters = DEFAULT_FSM_RADIUS;
     let targetLocationName = DEFAULT_FSM_NAME;
     let mataKuliah = 'PPK';
+    let questionCount = 0;
+    let shuffleQuestions = false;
 
     if (settingResult.rows.length > 0) {
       const row = settingResult.rows[0];
@@ -740,7 +802,13 @@ app.get('/v1/quiz/settings/:quizId', async (req, res) => {
       targetRadiusMeters = Number(row.target_radius_meters) || DEFAULT_FSM_RADIUS;
       targetLocationName = row.target_location_name || DEFAULT_FSM_NAME;
       mataKuliah = row.mata_kuliah || 'PPK';
+      questionCount = parseInt(row.question_count) || 0;
+      shuffleQuestions = Boolean(row.shuffle_questions);
     }
+
+    const effectiveQuestionCount = (questionCount > 0 && questionCount < totalQuestions)
+      ? questionCount
+      : totalQuestions;
 
     return res.json({
       status: 'success',
@@ -763,7 +831,10 @@ app.get('/v1/quiz/settings/:quizId', async (req, res) => {
         target_radius_meters: targetRadiusMeters,
         target_location_name: targetLocationName,
         mata_kuliah: mataKuliah,
-        total_questions: totalQuestions
+        question_count: questionCount,
+        shuffle_questions: shuffleQuestions,
+        total_bank_questions: totalQuestions,
+        total_questions: effectiveQuestionCount
       }
     });
 
@@ -778,7 +849,8 @@ app.post('/v1/admin/quiz/settings', authenticate, requireRole('SUPERADMIN', 'DOS
     quizId, startTime, endTime, durationMinutes, maxViolations, isActive,
     gradingRubric, autoGrade, geminiApiKey, geminiModel,
     requireLocation, targetLat, targetLng, targetRadiusMeters, targetLocationName,
-    mataKuliah, mata_kuliah
+    mataKuliah, mata_kuliah,
+    questionCount, question_count, shuffleQuestions, shuffle_questions
   } = req.body;
 
   if (!quizId) {
@@ -807,6 +879,8 @@ app.post('/v1/admin/quiz/settings', authenticate, requireRole('SUPERADMIN', 'DOS
   const tLng = targetLng !== undefined && targetLng !== null ? Number(targetLng) : DEFAULT_FSM_LNG;
   const tRadius = targetRadiusMeters ? parseInt(targetRadiusMeters, 10) : DEFAULT_FSM_RADIUS;
   const tLocName = typeof targetLocationName === 'string' && targetLocationName.trim() ? targetLocationName.trim() : DEFAULT_FSM_NAME;
+  const qCount = parseInt(questionCount ?? question_count) || 0;
+  const isShuffle = Boolean(shuffleQuestions ?? shuffle_questions);
 
   try {
     const result = await db.query(
@@ -814,10 +888,10 @@ app.post('/v1/admin/quiz/settings', authenticate, requireRole('SUPERADMIN', 'DOS
          quiz_id, start_time, end_time, duration_minutes, max_violations, is_active,
          grading_rubric, auto_grade, gemini_api_key, gemini_model,
          require_location, target_lat, target_lng, target_radius_meters, target_location_name,
-         mata_kuliah,
+         mata_kuliah, question_count, shuffle_questions,
          updated_at
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NOW())
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, NOW())
        ON CONFLICT (quiz_id) 
        DO UPDATE SET 
          start_time = EXCLUDED.start_time,
@@ -835,9 +909,11 @@ app.post('/v1/admin/quiz/settings', authenticate, requireRole('SUPERADMIN', 'DOS
          target_radius_meters = EXCLUDED.target_radius_meters,
          target_location_name = EXCLUDED.target_location_name,
          mata_kuliah = EXCLUDED.mata_kuliah,
+         question_count = EXCLUDED.question_count,
+         shuffle_questions = EXCLUDED.shuffle_questions,
          updated_at = NOW()
        RETURNING *`,
-      [quizId.trim(), start, end, duration, maxV, active, rubric, isAuto, key, model, reqLoc, tLat, tLng, tRadius, tLocName, courseName]
+      [quizId.trim(), start, end, duration, maxV, active, rubric, isAuto, key, model, reqLoc, tLat, tLng, tRadius, tLocName, courseName, qCount, isShuffle]
     );
     res.json({
       status: 'success',
@@ -849,10 +925,13 @@ app.post('/v1/admin/quiz/settings', authenticate, requireRole('SUPERADMIN', 'DOS
   }
 });
 
-// Mengambil daftar soal essay kuis
+// Mengambil daftar soal essay kuis (Mendukung Bank Soal & Pengacakan Deterministik per NIM)
 app.get('/v1/quiz/questions/:quizId', async (req, res) => {
   const { quizId } = req.params;
+  const { nim, attempt } = req.query;
   const cleanQuizId = (quizId || '').trim();
+  const cleanNim = (nim || '').trim();
+  const attemptNum = parseInt(attempt) || 1;
 
   try {
     const result = await db.query(
@@ -872,7 +951,33 @@ app.get('/v1/quiz/questions/:quizId', async (req, res) => {
       });
     }
 
-    res.json({ status: 'success', quizId: cleanQuizId, data: result.rows });
+    // Ambil setting kuis apakah question_count atau shuffle_questions aktif
+    const setRes = await db.query(
+      `SELECT COALESCE(question_count, 0) AS question_count, COALESCE(shuffle_questions, FALSE) AS shuffle_questions
+       FROM quiz_settings
+       WHERE quiz_id = $1`,
+      [cleanQuizId]
+    );
+    const qCount = parseInt(setRes.rows[0]?.question_count) || 0;
+    const isShuffle = Boolean(setRes.rows[0]?.shuffle_questions);
+
+    let finalQuestions = result.rows;
+    // Jika NIM disediakan dan (shuffle aktif ATAU question_count > 0)
+    if (cleanNim && (isShuffle || (qCount > 0 && qCount < result.rows.length))) {
+      finalQuestions = getAssignedQuestionsForStudent(result.rows, cleanNim, cleanQuizId, attemptNum, qCount, isShuffle);
+    } else if (qCount > 0 && qCount < result.rows.length && !cleanNim) {
+      // Jika tanpa NIM (misal preview umum), ambil sejumlah qCount
+      finalQuestions = result.rows.slice(0, qCount);
+    }
+
+    res.json({
+      status: 'success',
+      quizId: cleanQuizId,
+      totalBank: result.rows.length,
+      questionCount: finalQuestions.length,
+      isShuffled: isShuffle,
+      data: finalQuestions
+    });
   } catch (err) {
     sendServerError(res, err, 'Gagal mengambil daftar pertanyaan kuis.');
   }
@@ -1199,6 +1304,11 @@ app.post('/v1/quiz/submit', async (req, res) => {
     const finalBrowserInfo = req.body.browserInfo || browserCheck.name;
     const finalDeviceInfo = req.body.deviceInfo || (/Mobile|Android|iPhone|iPad/i.test(uaHeader) ? 'Mobile' : 'Desktop');
 
+    const safeQOrder = Array.isArray(req.body.assignedQuestions)
+      ? req.body.assignedQuestions
+      : (Array.isArray(req.body.questionOrder) ? req.body.questionOrder : null);
+    const qOrderJson = safeQOrder ? JSON.stringify(safeQOrder) : null;
+
     let insertedId = null;
     try {
       const insRes = await db.query(
@@ -1206,10 +1316,10 @@ app.post('/v1/quiz/submit', async (req, res) => {
            user_id, nim, quiz_id, answers, status, violation_count, max_violations,
            question_timings, activity_log, duration_seconds, attempt, kelas,
            location_lat, location_lng, location_distance_meters, location_accuracy_meters, location_status, client_ip,
-           browser_info, device_info,
+           browser_info, device_info, question_order,
            submitted_at
          )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, NOW())
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, NOW())
          RETURNING id`,
         [
           userId, cleanNim, cleanQuizId, JSON.stringify(answers || {}), finalStatus,
@@ -1221,7 +1331,8 @@ app.post('/v1/quiz/submit', async (req, res) => {
           finalLocationStatus,
           clientIp,
           finalBrowserInfo,
-          finalDeviceInfo
+          finalDeviceInfo,
+          qOrderJson
         ]
       );
       insertedId = insRes.rows[0]?.id;
@@ -1401,6 +1512,7 @@ app.post('/v1/quiz/live/session', async (req, res) => {
       deviceInfo: /Mobile|Android|iPhone|iPad/i.test(ua) ? 'Mobile' : 'Desktop',
       totalQuestions: totalQuestions || safeQTexts.length || 0,
       questionTexts: safeQTexts,
+      assignedQuestions: req.body.assignedQuestions || null,
       startedAt: now,
       startedAtISO: new Date(now).toISOString(),
       currentQuestionIndex: 0,
@@ -2155,7 +2267,8 @@ app.get('/v1/admin/submissions', authenticate, async (req, res) => {
         s.location_status,
         s.client_ip,
         COALESCE(s.browser_info, 'Chrome') AS browser_info,
-        COALESCE(s.device_info, 'Mobile') AS device_info
+        COALESCE(s.device_info, 'Mobile') AS device_info,
+        s.question_order
       FROM quiz_submissions s
       LEFT JOIN quiz_settings qs ON qs.quiz_id = s.quiz_id
       LEFT JOIN quiz_students stu ON stu.nim = s.nim
@@ -2182,6 +2295,11 @@ app.get('/v1/admin/submissions', authenticate, async (req, res) => {
         try { actLog = JSON.parse(actLog); } catch (_) { actLog = []; }
       }
 
+      let qOrder = r.question_order;
+      if (typeof qOrder === 'string') {
+        try { qOrder = JSON.parse(qOrder); } catch (_) { qOrder = null; }
+      }
+
       let mk = r.mata_kuliah || 'PPK';
       const cleanQuiz = String(r.quiz_id || '').toUpperCase();
       if (cleanQuiz.includes('IOT') || iotNimsSet.has(r.nim)) {
@@ -2194,7 +2312,8 @@ app.get('/v1/admin/submissions', authenticate, async (req, res) => {
         ...r,
         mata_kuliah: mk,
         question_timings: Array.isArray(qTimings) ? qTimings : [],
-        activity_log: Array.isArray(actLog) ? actLog : []
+        activity_log: Array.isArray(actLog) ? actLog : [],
+        question_order: Array.isArray(qOrder) ? qOrder : null
       };
     });
     res.json({ status: 'success', data: safeRows });
@@ -2474,7 +2593,7 @@ async function callGeminiWithFallback(rawApiKey, requestedModel, promptText) {
 // Helper Evaluasi Jawaban Mahasiswa Menggunakan Google Gemini AI
 async function evaluateSubmissionWithGemini(submissionId, customApiKey, customModel, customRubric) {
   const subRes = await db.query(
-    `SELECT s.id, s.user_id, s.nim, s.quiz_id, s.answers, s.status, s.grade,
+    `SELECT s.id, s.user_id, s.nim, s.quiz_id, s.answers, s.status, s.grade, s.question_order,
             set.grading_rubric, set.gemini_api_key, set.gemini_model, set.auto_grade
      FROM quiz_submissions s
      LEFT JOIN quiz_settings set ON set.quiz_id = s.quiz_id
@@ -2494,15 +2613,30 @@ async function evaluateSubmissionWithGemini(submissionId, customApiKey, customMo
   const rubric = (customRubric || sub.grading_rubric || '').trim() ||
     'Nilai ketepatan, kejelasan logika, dan kelengkapan konsep pada setiap jawaban essay mahasiswa. Berikan total nilai dalam skala 0 - 100 dan feedback singkat yang edukatif.';
 
-  // Ambil butir pertanyaan kuis beserta kunci jawaban / expected_answer jika ada
-  const qRes = await db.query(
-    `SELECT id, question_text, question_type, COALESCE(expected_answer, '') AS expected_answer 
-     FROM quiz_questions 
-     WHERE quiz_id = $1 
-     ORDER BY id ASC`,
-    [sub.quiz_id]
-  );
-  const questions = qRes.rows || [];
+  // Cek apakah mahasiswa mengerjakan soal acak/bank soal spesifik yang tersimpan di question_order
+  let assignedQuestions = null;
+  if (sub.question_order) {
+    try {
+      const parsed = typeof sub.question_order === 'string' ? JSON.parse(sub.question_order) : sub.question_order;
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        assignedQuestions = parsed;
+      }
+    } catch (_) {}
+  }
+
+  // Jika submission menyimpan question_order spesifik untuk mahasiswa ini, gunakan itu!
+  // Jika tidak, fallback ke master questions dari quiz_questions
+  let questions = assignedQuestions;
+  if (!questions || questions.length === 0) {
+    const qRes = await db.query(
+      `SELECT id, question_text, question_type, COALESCE(expected_answer, '') AS expected_answer 
+       FROM quiz_questions 
+       WHERE quiz_id = $1 
+       ORDER BY id ASC`,
+      [sub.quiz_id]
+    );
+    questions = qRes.rows || [];
+  }
 
   let answersObj = {};
   try {

@@ -200,10 +200,15 @@ export function StudentQuizPage() {
           return;
         }
 
+        const bankTotal = settings.total_bank_questions || questions.length;
+        const qCountText = bankTotal > questions.length
+          ? `${questions.length} Soal Essay (dari Bank Soal ${bankTotal} Butir)`
+          : `${questions.length} Soal Essay`;
+
         setScheduleState({
           loading: false,
           valid: true,
-          message: `✅ Siap Dikerjakan! Tersedia ${questions.length} Soal Essay • Durasi ${
+          message: `✅ Siap Dikerjakan! Tersedia ${qCountText} • Durasi ${
             settings.duration_minutes || 60
           } Menit (Maks ${settings.max_violations || 3}x Pelanggaran).`,
           type: 'ok',
@@ -650,6 +655,7 @@ export function StudentQuizPage() {
         isMock: locationRef.current.isMock || false,
         browserInfo: detectAllowedBrowser(navigator.userAgent).name,
         deviceInfo: /Mobile|Android|iPhone|iPad/i.test(navigator.userAgent) ? 'Mobile' : 'Desktop',
+        assignedQuestions: identityRef.current.assignedQuestions || scheduleState.questions || null,
       };
 
       // Also notify live session immediately
@@ -804,7 +810,28 @@ export function StudentQuizPage() {
     const cleanQuizId = quizId.trim();
     if (!cleanName || !cleanNim || !cleanQuizId) return;
 
-    const questions = scheduleState.questions || [];
+    const studentKelas = (studentCheck.student && studentCheck.student.kelas) || '-';
+    const attemptNum = studentCheck.attemptNumber || 1;
+
+    // Ambil daftar butir soal spesifik untuk NIM mahasiswa ini (dengan sampling & shuffle jika aktif)
+    let assignedQuestions = scheduleState.questions || [];
+    try {
+      const qStudentRes = await fetch(
+        `${API_BASE}/v1/quiz/questions/${encodeURIComponent(cleanQuizId)}?nim=${encodeURIComponent(cleanNim)}&attempt=${attemptNum}`
+      );
+      if (qStudentRes.ok) {
+        const qStudentData = await qStudentRes.json();
+        if (Array.isArray(qStudentData.data) && qStudentData.data.length > 0) {
+          assignedQuestions = qStudentData.data;
+          setScheduleState((prev) => ({
+            ...prev,
+            questions: assignedQuestions,
+          }));
+        }
+      }
+    } catch (_) {}
+
+    const questions = assignedQuestions;
     const durationMs = (Number(settings.duration_minutes) || 60) * 60 * 1000;
 
     const draftKey = `quiz_draft_${cleanNim}_${cleanQuizId}`;
@@ -834,8 +861,6 @@ export function StudentQuizPage() {
     }
 
     const qTexts = questions.map((q) => q.question_text || '');
-    const studentKelas = (studentCheck.student && studentCheck.student.kelas) || '-';
-    const attemptNum = studentCheck.attemptNumber || 1;
 
     // Daftarkan sesi live ke server terlebih dahulu dan periksa apakah ada duplikat sesi aktif
     try {
@@ -851,6 +876,7 @@ export function StudentQuizPage() {
           isRetake: !!studentCheck.isRetake,
           totalQuestions: questions.length,
           questionTexts: qTexts,
+          assignedQuestions: questions,
           locationLat: locationRef.current.lat,
           locationLng: locationRef.current.lng,
           locationAccuracy: locationRef.current.accuracy,
@@ -898,6 +924,7 @@ export function StudentQuizPage() {
       attempt: attemptNum,
       totalQ: questions.length,
       questionTexts: qTexts,
+      assignedQuestions: questions,
     };
     questionTimingsRef.current = questions.map((q, idx) => ({
       qNum: idx + 1,

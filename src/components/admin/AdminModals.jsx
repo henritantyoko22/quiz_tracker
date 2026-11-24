@@ -5,6 +5,12 @@ export function AnswerReaderModal({ modalData, onClose }) {
   if (!modalData) return null;
   const { sub, entries } = modalData;
 
+  const assignedList = Array.isArray(sub.question_order)
+    ? sub.question_order
+    : (typeof sub.question_order === 'string'
+        ? (() => { try { return JSON.parse(sub.question_order); } catch (_) { return null; } })()
+        : null);
+
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal-card" onClick={(e) => e.stopPropagation()}>
@@ -119,38 +125,93 @@ export function AnswerReaderModal({ modalData, onClose }) {
               )}
             </div>
           )}
-          {entries.map(([qKey, ans], idx) => (
-            <div
-              key={qKey}
-              style={{
-                background: '#f8fafc',
-                border: '1px solid #e2e8f0',
-                borderRadius: 10,
-                padding: 14,
-              }}
-            >
+          {entries.map(([qKey, ans], idx) => {
+            const qItem = assignedList && assignedList[idx];
+            return (
               <div
+                key={qKey}
                 style={{
-                  fontWeight: 700,
-                  fontSize: '0.84rem',
-                  color: '#4f46e5',
-                  marginBottom: 6,
+                  background: '#f8fafc',
+                  border: '1px solid #e2e8f0',
+                  borderRadius: 10,
+                  padding: 14,
                 }}
               >
-                Soal #{idx + 1} ({qKey})
+                <div
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    marginBottom: 8,
+                    flexWrap: 'wrap',
+                    gap: 6,
+                  }}
+                >
+                  <div
+                    style={{
+                      fontWeight: 800,
+                      fontSize: '0.86rem',
+                      color: '#4f46e5',
+                    }}
+                  >
+                    Soal #{idx + 1} {qItem && qItem.original_number ? `(Bank Soal Butir #${qItem.original_number})` : `(${qKey})`}
+                  </div>
+                </div>
+
+                {qItem && qItem.question_text && (
+                  <div
+                    style={{
+                      background: '#ffffff',
+                      border: '1px solid #e2e8f0',
+                      borderRadius: 8,
+                      padding: '10px 12px',
+                      fontSize: '0.86rem',
+                      fontWeight: 600,
+                      color: '#0f172a',
+                      marginBottom: 10,
+                    }}
+                  >
+                    <div style={{ fontSize: '0.72rem', color: '#64748b', fontWeight: 800, marginBottom: 4, textTransform: 'uppercase' }}>
+                      Pertanyaan Soal:
+                    </div>
+                    {qItem.question_text}
+                    {qItem.expected_answer && (
+                      <div
+                        style={{
+                          marginTop: 8,
+                          paddingTop: 8,
+                          borderTop: '1px dashed #cbd5e1',
+                          fontSize: '0.8rem',
+                          color: '#059669',
+                          fontWeight: 500,
+                        }}
+                      >
+                        <span style={{ fontWeight: 800 }}>Kunci / Jawaban yang Diharapkan:</span> {qItem.expected_answer}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <div style={{ fontSize: '0.72rem', color: '#64748b', fontWeight: 800, marginBottom: 4, textTransform: 'uppercase' }}>
+                  Jawaban Mahasiswa:
+                </div>
+                <div
+                  style={{
+                    whiteSpace: 'pre-wrap',
+                    fontSize: '0.9rem',
+                    color: '#1e293b',
+                    lineHeight: 1.55,
+                    background: '#ffffff',
+                    padding: '10px 12px',
+                    borderRadius: 8,
+                    border: '1px solid #e2e8f0',
+                  }}
+                >
+                  {String(ans || '-')}
+                </div>
               </div>
-              <div
-                style={{
-                  whiteSpace: 'pre-wrap',
-                  fontSize: '0.9rem',
-                  color: '#1e293b',
-                  lineHeight: 1.55,
-                }}
-              >
-                {String(ans || '-')}
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     </div>

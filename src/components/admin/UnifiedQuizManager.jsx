@@ -14,6 +14,8 @@ export function UnifiedQuizManager({ token, quizList, onRefreshQuizList, showToa
   const [mataKuliah, setMataKuliah] = useState('PPK');
   const [requireLocation, setRequireLocation] = useState(true);
   const [targetRadiusMeters, setTargetRadiusMeters] = useState(450);
+  const [questionCount, setQuestionCount] = useState(0);
+  const [shuffleQuestions, setShuffleQuestions] = useState(false);
 
   // Gemini AI Auto-Grading state
   const [gradingRubric, setGradingRubric] = useState('');
@@ -112,6 +114,8 @@ export function UnifiedQuizManager({ token, quizList, onRefreshQuizList, showToa
           );
           setRequireLocation(s.require_location !== false);
           setTargetRadiusMeters(s.target_radius_meters ?? 450);
+          setQuestionCount(s.question_count || 0);
+          setShuffleQuestions(Boolean(s.shuffle_questions));
         } else {
           setDurationMinutes(30);
           setMaxViolations(3);
@@ -123,6 +127,8 @@ export function UnifiedQuizManager({ token, quizList, onRefreshQuizList, showToa
           setAutoGrade(false);
           setRequireLocation(true);
           setTargetRadiusMeters(450);
+          setQuestionCount(0);
+          setShuffleQuestions(false);
         }
 
         const rawQuestions = Array.isArray(qData.data) ? qData.data : [];
@@ -277,6 +283,8 @@ export function UnifiedQuizManager({ token, quizList, onRefreshQuizList, showToa
           targetLng: 110.443800,
           targetRadiusMeters: Number(targetRadiusMeters) || 450,
           targetLocationName: 'Fakultas Sains dan Matematika (FSM) Undip',
+          questionCount: Number(questionCount) || 0,
+          shuffleQuestions: Boolean(shuffleQuestions),
         }),
       });
       const settingsData = await settingsRes.json();
@@ -552,6 +560,101 @@ export function UnifiedQuizManager({ token, quizList, onRefreshQuizList, showToa
                       onChange={(e) => setRequireLocation(e.target.checked)}
                       style={{ width: 18, height: 18, accentColor: '#16a34a' }}
                     />
+                  </label>
+                </div>
+              </div>
+
+              {/* Bank Soal & Random Shuffle per Mahasiswa Setting */}
+              <div
+                style={{
+                  gridColumn: 'span 2',
+                  background:
+                    (Number(questionCount) > 0 && Number(questionCount) < questions.length) || shuffleQuestions
+                      ? '#eff6ff'
+                      : '#f8fafc',
+                  border: `1.5px solid ${
+                    (Number(questionCount) > 0 && Number(questionCount) < questions.length) || shuffleQuestions
+                      ? '#93c5fd'
+                      : '#cbd5e1'
+                  }`,
+                  borderRadius: 10,
+                  padding: '12px 14px',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  flexWrap: 'wrap',
+                  gap: 12,
+                  marginTop: 6,
+                }}
+              >
+                <div style={{ flex: 1, minWidth: 260 }}>
+                  <div
+                    style={{
+                      fontWeight: 800,
+                      fontSize: '0.86rem',
+                      color:
+                        (Number(questionCount) > 0 && Number(questionCount) < questions.length) || shuffleQuestions
+                          ? '#1d4ed8'
+                          : '#334155',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 6,
+                    }}
+                  >
+                    <span>🎲</span> Bank Soal & Acak Soal per Mahasiswa (Shuffle)
+                  </div>
+                  <div style={{ fontSize: '0.76rem', color: '#475569', marginTop: 3 }}>
+                    Tentukan berapa butir soal yang dikerjakan mahasiswa dari total bank soal ({questions.length} butir). Pengacakan terkunci deterministik berbasis NIM (anti-error saat refresh).
+                  </div>
+                  {Number(questionCount) > 0 && Number(questionCount) < questions.length && (
+                    <div style={{ marginTop: 6, fontSize: '0.74rem', fontWeight: 800, color: '#2563eb' }}>
+                      ⚡ Mode Aktif: Mahasiswa akan mengerjakan {questionCount} soal acak dari total {questions.length} butir bank soal.
+                    </div>
+                  )}
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <label style={{ fontSize: '0.76rem', fontWeight: 700, color: '#334155' }}>
+                      Soal Dikerjakan:
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      max={Math.max(questions.length, 100)}
+                      value={questionCount || ''}
+                      placeholder={questions.length ? `Semua (${questions.length})` : '0 (Semua)'}
+                      onChange={(e) => setQuestionCount(e.target.value)}
+                      style={{
+                        width: 82,
+                        padding: '4px 8px',
+                        borderRadius: 6,
+                        border: '1px solid #cbd5e1',
+                        fontSize: '0.8rem',
+                        fontWeight: 700,
+                        textAlign: 'center',
+                      }}
+                      title="Contoh: Isi 6 jika dari 12 butir soal di bank soal, mahasiswa hanya mengerjakan 6 soal acak. Kosongkan atau isi 0 jika seluruh butir dikerjakan."
+                    />
+                    <span style={{ fontSize: '0.74rem', color: '#64748b' }}>butir</span>
+                  </div>
+                  <label
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 6,
+                      cursor: 'pointer',
+                      fontSize: '0.78rem',
+                      fontWeight: 700,
+                      color: '#1e293b',
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={shuffleQuestions}
+                      onChange={(e) => setShuffleQuestions(e.target.checked)}
+                      style={{ width: 16, height: 16, accentColor: '#2563eb' }}
+                    />
+                    <span>🔀 Acak Soal (Shuffle)</span>
                   </label>
                 </div>
               </div>

@@ -579,7 +579,17 @@ export function AdminDashboardPage() {
     // 4. Susun Baris Data Mahasiswa, Soal, & Jawaban
     const rows = filteredSubmissions.map((s, idx) => {
       const ansObj = parseAnswersObject(s.answers);
-      const qList = quizQuestionMap[String(s.quiz_id || '').trim()] || [];
+      let qList = quizQuestionMap[String(s.quiz_id || '').trim()] || [];
+      if (Array.isArray(s.question_order) && s.question_order.length > 0) {
+        qList = s.question_order.map((q) => q.question_text || '');
+      } else if (typeof s.question_order === 'string') {
+        try {
+          const parsed = JSON.parse(s.question_order);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            qList = parsed.map((q) => q.question_text || '');
+          }
+        } catch (_) {}
+      }
       const statusText =
         s.status === 'DISQUALIFIED'
           ? 'Diskualifikasi'
@@ -702,7 +712,15 @@ export function AdminDashboardPage() {
       daftar_soal_per_quiz: quizQuestionMap,
       submissions: filteredSubmissions.map((s, idx) => {
         const ansObj = parseAnswersObject(s.answers);
-        const qList = quizQuestionMap[String(s.quiz_id || '').trim()] || [];
+        let qList = quizQuestionMap[String(s.quiz_id || '').trim()] || [];
+        if (Array.isArray(s.question_order) && s.question_order.length > 0) {
+          qList = s.question_order;
+        } else if (typeof s.question_order === 'string') {
+          try {
+            const parsed = JSON.parse(s.question_order);
+            if (Array.isArray(parsed) && parsed.length > 0) qList = parsed;
+          } catch (_) {}
+        }
 
         const statusText =
           s.status === 'DISQUALIFIED'
