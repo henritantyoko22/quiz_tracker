@@ -2527,8 +2527,8 @@ app.get('/v1/admin/submissions', authenticate, async (req, res) => {
 
 // Lazy-load detail lengkap 1 submission (question_order, question_timings, activity_log) saat modal diklik (< 2ms by PK)
 app.get('/v1/admin/submissions/:id', authenticate, async (req, res) => {
-  const subId = parseInt(req.params.id, 10);
-  if (isNaN(subId) || subId <= 0) {
+  const subId = String(req.params.id || '').trim();
+  if (!subId || subId === 'undefined' || subId === 'null') {
     return res.status(400).json({ status: 'error', message: 'ID submission tidak valid.' });
   }
   try {
@@ -2536,7 +2536,7 @@ app.get('/v1/admin/submissions/:id', authenticate, async (req, res) => {
       `SELECT id, nim, quiz_id, answers, question_order, question_timings, activity_log,
               COALESCE(duration_seconds, 0) AS duration_seconds
        FROM quiz_submissions
-       WHERE id = $1`,
+       WHERE id::text = $1`,
       [subId]
     );
     if (result.rows.length === 0) {
@@ -2619,14 +2619,14 @@ async function cleanupAfterDeletedSubmissions(deletedRows) {
 
 // Hapus 1 submission mahasiswa (misal pengerjaan asal-asalan) - Hanya SUPERADMIN & DOSEN
 app.delete('/v1/admin/submissions/:id', authenticate, requireRole('SUPERADMIN', 'DOSEN'), async (req, res) => {
-  const subId = parseInt(req.params.id, 10);
-  if (isNaN(subId) || subId <= 0) {
+  const subId = String(req.params.id || '').trim();
+  if (!subId || subId === 'undefined' || subId === 'null') {
     return res.status(400).json({ status: 'error', message: 'ID submission tidak valid.' });
   }
   try {
     const delRes = await db.query(
       `DELETE FROM quiz_submissions
-       WHERE id = $1
+       WHERE id::text = $1
        RETURNING id, user_id, nim, quiz_id, attempt`,
       [subId]
     );
@@ -2648,14 +2648,14 @@ app.delete('/v1/admin/submissions/:id', authenticate, requireRole('SUPERADMIN', 
 // Hapus banyak submission sekaligus (Bulk Delete) - Hanya SUPERADMIN & DOSEN
 app.post('/v1/admin/submissions/bulk-delete', authenticate, requireRole('SUPERADMIN', 'DOSEN'), async (req, res) => {
   const rawIds = Array.isArray(req.body.ids) ? req.body.ids : [];
-  const cleanIds = [...new Set(rawIds.map(id => parseInt(id, 10)).filter(id => !isNaN(id) && id > 0))];
+  const cleanIds = [...new Set(rawIds.map(id => String(id || '').trim()).filter(id => id.length > 0 && id !== 'undefined' && id !== 'null'))];
   if (cleanIds.length === 0) {
     return res.status(400).json({ status: 'error', message: 'Pilih minimal 1 submission untuk dihapus.' });
   }
   try {
     const delRes = await db.query(
       `DELETE FROM quiz_submissions
-       WHERE id = ANY($1::int[])
+       WHERE id::text = ANY($1::text[])
        RETURNING id, user_id, nim, quiz_id, attempt`,
       [cleanIds]
     );
@@ -3222,7 +3222,7 @@ function loadReactModulesRaw() {
 }
 
 function buildReactBundleCode() {
-  if (cachedBundleCode) return cachedBundleCode;
+  if (process.env.NODE_ENV === 'production' && cachedBundleCode) return cachedBundleCode;
   const chunks = [
     'const { useState, useEffect, useMemo, useCallback, useRef, memo } = React;'
   ];
@@ -3239,7 +3239,7 @@ function buildReactBundleCode() {
 }
 
 function getCachedHtml() {
-  if (cachedHtml) return cachedHtml;
+  if (process.env.NODE_ENV === 'production' && cachedHtml) return cachedHtml;
   const cssContent = fs.readFileSync(path.join(__dirname, 'src/styles/app.css'), 'utf8');
   const jsxBundle = buildReactBundleCode();
   cachedHtml = `<!DOCTYPE html>
