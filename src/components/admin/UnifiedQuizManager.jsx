@@ -6,6 +6,11 @@ export function UnifiedQuizManager({ token, quizList, onRefreshQuizList, showToa
   const [newQuizInput, setNewQuizInput] = useState('');
   const [quizSearch, setQuizSearch] = useState('');
 
+  // Rename Quiz state
+  const [isEditingQuizName, setIsEditingQuizName] = useState(false);
+  const [renamedQuizInput, setRenamedQuizInput] = useState('');
+  const [renamingQuiz, setRenamingQuiz] = useState(false);
+
   // Timer & Schedule state
   const [durationMinutes, setDurationMinutes] = useState(30);
   const [maxViolations, setMaxViolations] = useState(3);
@@ -115,6 +120,8 @@ export function UnifiedQuizManager({ token, quizList, onRefreshQuizList, showToa
     async (qId) => {
       if (!qId) return;
       setLoadingQuiz(true);
+      setRenamedQuizInput(String(qId));
+      setIsEditingQuizName(false);
       try {
         // Check metadata from quizList first as fallback
         const listMeta = quizList.find(
@@ -208,6 +215,8 @@ export function UnifiedQuizManager({ token, quizList, onRefreshQuizList, showToa
     const trimmed = newQuizInput.trim();
     if (!trimmed) return;
     setSelectedQuizId(trimmed);
+    setRenamedQuizInput(trimmed);
+    setIsEditingQuizName(false);
     setNewQuizInput('');
     setDurationMinutes(30);
     setMaxViolations(3);
@@ -218,6 +227,43 @@ export function UnifiedQuizManager({ token, quizList, onRefreshQuizList, showToa
     setAutoGrade(false);
     setQuestions([{ questionText: '', questionType: 'ESSAY', expectedAnswer: '' }]);
     setJsonText('[\n  {\n    "question_text": "Tuliskan pertanyaan soal 1...",\n    "expected_answer": "Kunci jawaban atau poin konsep yang diharapkan..."\n  }\n]');
+  };
+
+  const handleExecuteRename = async () => {
+    const cleanNew = renamedQuizInput.trim().replace(/\s+/g, '_');
+    if (!cleanNew) {
+      showToast('Nama/ID Quiz tidak boleh kosong!', 'error');
+      return;
+    }
+    if (cleanNew === selectedQuizId) {
+      setIsEditingQuizName(false);
+      return;
+    }
+    const confirmMsg = `Ubah nama kuis dari #${selectedQuizId} menjadi #${cleanNew}?\n\nSeluruh soal, submission nilai mahasiswa, dan sesi ujian aktif untuk kuis ini akan otomatis dialihkan ke nama/ID baru.`;
+    if (!window.confirm(confirmMsg)) return;
+
+    setRenamingQuiz(true);
+    try {
+      const res = await fetch(`${API_BASE}/v1/admin/quiz/rename`, {
+        method: 'POST',
+        headers: getAuthHeaders(token),
+        body: JSON.stringify({ oldQuizId: selectedQuizId, newQuizId: cleanNew }),
+      });
+      const data = await res.json();
+      if (res.ok && data.status === 'success') {
+        showToast(data.message, 'success');
+        setIsEditingQuizName(false);
+        setSelectedQuizId(data.newQuizId);
+        setRenamedQuizInput(data.newQuizId);
+        if (onRefreshQuizList) onRefreshQuizList();
+      } else {
+        showToast(data.message || 'Gagal mengubah nama kuis', 'error');
+      }
+    } catch (err) {
+      showToast('Gagal mengubah nama kuis: ' + err.message, 'error');
+    } finally {
+      setRenamingQuiz(false);
+    }
   };
 
   const handleQuestionChange = (index, value) => {
@@ -451,9 +497,6 @@ export function UnifiedQuizManager({ token, quizList, onRefreshQuizList, showToa
             filteredSidebarQuizzes.map((item, idx) => {
               const isSelected = String(item.quiz_id) === String(selectedQuizId);
               const isLatest = idx === 0 && !quizSearch;
-              const courseName = String(item.mata_kuliah || 'PPK').toUpperCase();
-              const isIot = courseName.includes('IOT');
-              const isAlgo = courseName.includes('ALGO');
 
               return (
                 <div
@@ -461,75 +504,81 @@ export function UnifiedQuizManager({ token, quizList, onRefreshQuizList, showToa
                   className={`quiz-list-item ${isSelected ? 'active' : ''}`}
                   onClick={() => setSelectedQuizId(String(item.quiz_id))}
                   style={{
-                    position: 'relative',
-                    padding: '11px 13px',
-                    borderRadius: 10,
-                    marginBottom: 7,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    padding: '10px 12px',
+                    borderRadius: 8,
+                    marginBottom: 6,
                     cursor: 'pointer',
-                    transition: 'all 0.16s ease',
+                    transition: 'all 0.15s ease',
                     background: isSelected ? '#eef2ff' : '#ffffff',
                     border: isSelected ? '1.5px solid #4f46e5' : '1px solid #e2e8f0',
-                    boxShadow: isSelected ? '0 2px 8px rgba(79, 70, 229, 0.14)' : 'none',
+                    boxShadow: isSelected ? '0 2px 6px rgba(79, 70, 229, 0.1)' : 'none',
                   }}
                 >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 5 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                      <span style={{ fontWeight: 800, fontSize: '0.88rem', color: isSelected ? '#4338ca' : '#0f172a' }}>
+                  <div style={{ flex: 1, minWidth: 0, paddingRight: 8 }}>
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 6,
+                        fontWeight: 700,
+                        fontSize: '0.86rem',
+                        color: isSelected ? '#4338ca' : '#0f172a',
+                      }}
+                    >
+                      <span
+                        style={{
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
                         Quiz #{item.quiz_id}
                       </span>
                       {isLatest && (
                         <span
-                          className="badge"
                           style={{
                             fontSize: '0.62rem',
-                            fontWeight: 900,
+                            fontWeight: 800,
                             background: '#fef3c7',
                             color: '#b45309',
                             border: '1px solid #fde68a',
+                            borderRadius: 4,
                             padding: '1px 5px',
+                            flexShrink: 0,
                           }}
                         >
-                          ⚡ TERBARU
+                          Baru
                         </span>
                       )}
                     </div>
-                    <span
-                      className={`badge ${item.is_active === false ? 'badge-danger' : 'badge-success'}`}
-                      style={{ fontSize: '0.68rem', fontWeight: 800 }}
-                    >
-                      {item.is_active === false ? 'TUTUP' : 'AKTIF'}
-                    </span>
-                  </div>
-
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 6 }}>
-                    <span
+                    <div
                       style={{
-                        fontSize: '0.73rem',
+                        fontSize: '0.72rem',
                         color: '#64748b',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 4,
+                        marginTop: 2,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
                       }}
                     >
-                      <span>📝 {item.total_questions || 0} Soal</span>
-                      <span>•</span>
-                      <span>⏱️ {item.duration_minutes || 60}m</span>
-                    </span>
-
-                    <span
-                      className="badge"
-                      style={{
-                        fontSize: '0.66rem',
-                        fontWeight: 800,
-                        background: isIot ? '#e0f2fe' : isAlgo ? '#f3e8ff' : '#e0e7ff',
-                        color: isIot ? '#0369a1' : isAlgo ? '#7e22ce' : '#4338ca',
-                        border: `1px solid ${isIot ? '#bae6fd' : isAlgo ? '#e9d5ff' : '#c7d2fe'}`,
-                        padding: '1px 6px',
-                      }}
-                    >
-                      {isIot ? '📡 IoT' : isAlgo ? '🧬 Algo' : '📚 PPK'}
-                    </span>
+                      {item.mata_kuliah || 'PPK'} • {item.total_questions || 0} Soal • {item.duration_minutes || 60}m
+                    </div>
                   </div>
+
+                  <span
+                    className={`badge ${item.is_active === false ? 'badge-danger' : 'badge-success'}`}
+                    style={{
+                      fontSize: '0.66rem',
+                      fontWeight: 800,
+                      flexShrink: 0,
+                      padding: '2px 7px',
+                    }}
+                  >
+                    {item.is_active === false ? 'TUTUP' : 'AKTIF'}
+                  </span>
                 </div>
               );
             })
@@ -540,14 +589,81 @@ export function UnifiedQuizManager({ token, quizList, onRefreshQuizList, showToa
       {/* RIGHT CONTENT: UNIFIED TIMER + QUESTION EDITOR */}
       <div className="quiz-editor-panel">
         <div className="quiz-editor-header">
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <span style={{ fontWeight: 800, fontSize: '1rem', color: '#0f172a' }}>
-              ⚙️ Kelola Quiz #{selectedQuizId || '-'}
-            </span>
-            {loadingQuiz && (
-              <span className="badge badge-info">Memuat data...</span>
-            )}
-          </div>
+          {isEditingQuizName ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <span style={{ fontWeight: 800, fontSize: '0.92rem', color: '#0f172a' }}>Quiz #</span>
+              <input
+                type="text"
+                value={renamedQuizInput}
+                onChange={(e) => setRenamedQuizInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleExecuteRename();
+                  if (e.key === 'Escape') setIsEditingQuizName(false);
+                }}
+                placeholder="Nama kuis baru..."
+                style={{
+                  padding: '5px 10px',
+                  fontSize: '0.88rem',
+                  fontWeight: 700,
+                  border: '1.5px solid #6366f1',
+                  borderRadius: 6,
+                  outline: 'none',
+                  minWidth: 160,
+                }}
+                autoFocus
+              />
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                onClick={handleExecuteRename}
+                disabled={renamingQuiz || !renamedQuizInput.trim()}
+                style={{ padding: '4px 10px', fontSize: '0.78rem' }}
+              >
+                {renamingQuiz ? '⏳ Menyimpan...' : '💾 Simpan Nama'}
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => {
+                  setRenamedQuizInput(selectedQuizId);
+                  setIsEditingQuizName(false);
+                }}
+                disabled={renamingQuiz}
+                style={{ padding: '4px 8px', fontSize: '0.78rem' }}
+              >
+                Batal
+              </button>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <span style={{ fontWeight: 800, fontSize: '1rem', color: '#0f172a' }}>
+                ⚙️ Kelola Quiz #{selectedQuizId || '-'}
+              </span>
+              {selectedQuizId && (
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => {
+                    setRenamedQuizInput(selectedQuizId);
+                    setIsEditingQuizName(true);
+                  }}
+                  title="Ubah Nama / ID Quiz ini"
+                  style={{
+                    padding: '3px 8px',
+                    fontSize: '0.76rem',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 4,
+                  }}
+                >
+                  ✏️ Ubah Nama
+                </button>
+              )}
+              {loadingQuiz && (
+                <span className="badge badge-info" style={{ fontSize: '0.7rem' }}>Memuat data...</span>
+              )}
+            </div>
+          )}
           <div style={{ display: 'flex', gap: 8 }}>
             <button
               type="button"
@@ -583,20 +699,55 @@ export function UnifiedQuizManager({ token, quizList, onRefreshQuizList, showToa
                 Status Ujian Dibuka (Aktif)
               </label>
             </div>
-            <div style={{ marginBottom: 14 }}>
-              <label style={{ fontSize: '0.8rem', fontWeight: 800, color: '#334155', display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-                <span>📚</span> Mata Kuliah Kuis Ini:
-              </label>
-              <select
-                className="filter-select"
-                style={{ width: '100%', maxWidth: 380, padding: '8px 12px', fontSize: '0.86rem', fontWeight: 700 }}
-                value={mataKuliah}
-                onChange={(e) => setMataKuliah(e.target.value)}
-              >
-                <option value="PPK">⚙️ Pengembangan Perangkat Keras (PPK)</option>
-                <option value="IoT">📡 Internet of Things (IoT)</option>
-                <option value="Algoritma Evolusioner">🧬 Algoritma Evolusioner</option>
-              </select>
+            <div style={{ marginBottom: 14, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 14 }}>
+              <div>
+                <label style={{ fontSize: '0.8rem', fontWeight: 800, color: '#334155', display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                  <span>🏷️</span> Nama / ID Quiz:
+                </label>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <input
+                    type="text"
+                    value={renamedQuizInput}
+                    onChange={(e) => setRenamedQuizInput(e.target.value)}
+                    placeholder="Nama / ID Quiz..."
+                    style={{
+                      flex: 1,
+                      padding: '8px 12px',
+                      fontSize: '0.86rem',
+                      fontWeight: 700,
+                      border: '1px solid #cbd5e1',
+                      borderRadius: 6,
+                    }}
+                  />
+                  {renamedQuizInput.trim() && renamedQuizInput.trim() !== selectedQuizId && (
+                    <button
+                      type="button"
+                      className="btn btn-primary btn-sm"
+                      onClick={handleExecuteRename}
+                      disabled={renamingQuiz}
+                      style={{ whiteSpace: 'nowrap' }}
+                    >
+                      {renamingQuiz ? '⏳...' : '✏️ Simpan Nama'}
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div>
+                <label style={{ fontSize: '0.8rem', fontWeight: 800, color: '#334155', display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                  <span>📚</span> Mata Kuliah Kuis Ini:
+                </label>
+                <select
+                  className="filter-select"
+                  style={{ width: '100%', padding: '8px 12px', fontSize: '0.86rem', fontWeight: 700 }}
+                  value={mataKuliah}
+                  onChange={(e) => setMataKuliah(e.target.value)}
+                >
+                  <option value="PPK">⚙️ Pengembangan Perangkat Keras (PPK)</option>
+                  <option value="IoT">📡 Internet of Things (IoT)</option>
+                  <option value="Algoritma Evolusioner">🧬 Algoritma Evolusioner</option>
+                </select>
+              </div>
             </div>
 
             <div className="form-grid-4">

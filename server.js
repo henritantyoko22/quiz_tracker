@@ -3439,6 +3439,68 @@ app.delete('/v1/admin/questions/:id', authenticate, requireRole('SUPERADMIN', 'D
   }
 });
 
+// Mengubah Nama / ID Quiz (SUPERADMIN & DOSEN)
+app.post('/v1/admin/quiz/rename', authenticate, requireRole('SUPERADMIN', 'DOSEN'), async (req, res) => {
+  const { oldQuizId, newQuizId } = req.body;
+  if (!oldQuizId || !newQuizId) {
+    return res.status(400).json({ status: 'error', message: 'ID Quiz lama dan ID Quiz baru wajib diisi.' });
+  }
+
+  const cleanOld = String(oldQuizId).trim();
+  const cleanNew = String(newQuizId).trim();
+
+  if (!cleanNew) {
+    return res.status(400).json({ status: 'error', message: 'Nama/ID Quiz baru tidak boleh kosong.' });
+  }
+
+  if (cleanOld === cleanNew) {
+    return res.json({ status: 'success', message: 'Nama kuis tidak mengalami perubahan.', newQuizId: cleanNew });
+  }
+
+  try {
+    // Pastikan cleanNew belum digunakan oleh kuis lain
+    const checkRes = await db.query(
+      'SELECT quiz_id FROM quiz_settings WHERE LOWER(quiz_id) = LOWER($1) AND quiz_id != $2 LIMIT 1',
+      [cleanNew, cleanOld]
+    );
+    if (checkRes.rows.length > 0) {
+      return res.status(400).json({
+        status: 'error',
+        message: `ID Quiz #${cleanNew} sudah ada di database. Silakan gunakan nama/ID lain.`
+      });
+    }
+
+    // Update beruntun ke seluruh tabel terkait
+    await db.query('UPDATE quiz_settings SET quiz_id = $1, updated_at = NOW() WHERE quiz_id = $2', [cleanNew, cleanOld]);
+    await db.query('UPDATE quiz_questions SET quiz_id = $1 WHERE quiz_id = $2', [cleanNew, cleanOld]);
+    await db.query('UPDATE quiz_submissions SET quiz_id = $1 WHERE quiz_id = $2', [cleanNew, cleanOld]);
+    await db.query('UPDATE quiz_violations SET quiz_id = $1 WHERE quiz_id = $2', [cleanNew, cleanOld]);
+    await db.query(`
+      UPDATE quiz_live_sessions 
+      SET quiz_id = $1, session_key = nim || '_' || $1 
+      WHERE quiz_id = $2
+    `, [cleanNew, cleanOld]);
+
+    // Update juga di memory liveStudentSessions jika ada yang sedang aktif
+    for (const [key, sess] of liveStudentSessions.entries()) {
+      if (sess.quizId === cleanOld) {
+        liveStudentSessions.delete(key);
+        sess.quizId = cleanNew;
+        sess.key = getLiveSessionKey(sess.nim, cleanNew);
+        liveStudentSessions.set(sess.key, sess);
+      }
+    }
+
+    res.json({
+      status: 'success',
+      message: `ID/Nama Quiz berhasil diubah dari #${cleanOld} menjadi #${cleanNew}.`,
+      newQuizId: cleanNew
+    });
+  } catch (err) {
+    sendServerError(res, err, 'Gagal mengubah ID/Nama Quiz.');
+  }
+});
+
 // Dynamic React Modular Bundle dengan In-Memory Caching (Mencegah Event Loop Blocking)
 let cachedBundleCode = null;
 let cachedHtml = null;
