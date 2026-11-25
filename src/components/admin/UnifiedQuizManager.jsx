@@ -564,7 +564,7 @@ export function UnifiedQuizManager({ token, quizList, onRefreshQuizList, showToa
                         whiteSpace: 'nowrap',
                       }}
                     >
-                      {item.mata_kuliah || 'PPK'} • {item.total_questions || 0} Soal • {item.duration_minutes || 60}m
+                      {item.mata_kuliah || 'PPK'} • {item.total_questions || 0} Soal{item.total_bank_questions && item.total_bank_questions > item.total_questions ? ` (Bank: ${item.total_bank_questions})` : ''} • {item.duration_minutes || 60}m
                     </div>
                   </div>
 

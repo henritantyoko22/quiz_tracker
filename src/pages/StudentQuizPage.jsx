@@ -204,11 +204,13 @@ export function StudentQuizPage() {
         }
 
         const bankTotal = Number(settings.total_bank_questions) || questions.length;
-        const targetQCount = Number(settings.question_count || settings.total_questions) || bankTotal;
-        const assignedCount = (targetQCount > 0 && targetQCount < bankTotal) ? targetQCount : bankTotal;
+        const targetQCount = Number(settings.question_count) || 0;
+        const assignedCount = (targetQCount > 0 && targetQCount < bankTotal) 
+          ? targetQCount 
+          : (Number(settings.total_questions) || bankTotal);
         const qCountText = assignedCount < bankTotal
           ? `${assignedCount} Soal Essay Acak (dari Bank Soal ${bankTotal} Butir)`
-          : `${bankTotal} Soal Essay`;
+          : `${assignedCount} Soal Essay`;
 
         setScheduleState({
           loading: false,
@@ -219,6 +221,8 @@ export function StudentQuizPage() {
           type: 'ok',
           settings,
           questions,
+          bankTotal,
+          studentQuestionCount: assignedCount,
         });
       } catch (err) {
         if (err.name !== 'AbortError') {
@@ -1712,7 +1716,7 @@ export function StudentQuizPage() {
                     <span style={{ color: '#dc2626' }}>❌ ID Quiz tidak ditemukan di database atau belum memiliki soal.</span>
                   ) : quizId.trim() && scheduleState.valid ? (
                     <span style={{ color: '#16a34a' }}>
-                      ✅ ID Quiz valid ({scheduleState.questions.length} Soal • {scheduleState.settings?.duration_minutes || 60} Menit).
+                      ✅ ID Quiz valid ({scheduleState.studentQuestionCount || (scheduleState.settings?.total_questions || scheduleState.questions.length)} Soal • {scheduleState.settings?.duration_minutes || 60} Menit).
                     </span>
                   ) : (
                     <span>Ketik kode kuis yang diberikan oleh Dosen pengampu.</span>
@@ -1753,9 +1757,25 @@ export function StudentQuizPage() {
                           {studentCheck.isRetake ? 'Percobaan 2 / 2' : 'Percobaan 1 / 2'}
                         </span>
                       </div>
-                      <div style={{ fontSize: '0.84rem', color: '#1e293b' }}>
-                        Tersedia <strong>{scheduleState.questions.length} Soal Essay</strong> • Durasi <strong>{scheduleState.settings?.duration_minutes || 60} Menit</strong>
-                      </div>
+                      {(() => {
+                        const bankTotal = Number(scheduleState.settings?.total_bank_questions) || scheduleState.bankTotal || scheduleState.questions.length;
+                        const targetQ = Number(scheduleState.studentQuestionCount) || (
+                          Number(scheduleState.settings?.question_count) > 0 && Number(scheduleState.settings?.question_count) < bankTotal
+                            ? Number(scheduleState.settings?.question_count)
+                            : (Number(scheduleState.settings?.total_questions) || bankTotal)
+                        );
+                        return (
+                          <div style={{ fontSize: '0.84rem', color: '#1e293b' }}>
+                            Tersedia <strong>{targetQ} Soal Essay</strong>
+                            {targetQ < bankTotal && (
+                              <span style={{ fontSize: '0.78rem', color: '#64748b', marginLeft: 5 }}>
+                                (Acak dari Bank {bankTotal} Soal)
+                              </span>
+                            )}
+                            {' '}• Durasi <strong>{scheduleState.settings?.duration_minutes || 60} Menit</strong>
+                          </div>
+                        );
+                      })()}
                       {studentCheck.isRetake && (
                         <div
                           style={{

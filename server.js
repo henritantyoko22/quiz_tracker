@@ -730,14 +730,21 @@ app.get('/v1/quiz/list', async (req, res) => {
     const result = await db.query(
       `SELECT 
          COALESCE(q.quiz_id, s.quiz_id) AS quiz_id,
-         COALESCE(q.total_questions, 0)::int AS total_questions,
+         COALESCE(q.total_questions, 0)::int AS total_bank_questions,
+         COALESCE(s.question_count, 0)::int AS question_count,
+         CASE 
+           WHEN COALESCE(s.question_count, 0) > 0 AND COALESCE(s.question_count, 0) < COALESCE(q.total_questions, 0)
+           THEN s.question_count
+           ELSE COALESCE(q.total_questions, 0)
+         END::int AS total_questions,
          COALESCE(s.duration_minutes, 60)::int AS duration_minutes,
          COALESCE(s.max_violations, 3)::int AS max_violations,
          COALESCE(s.is_active, TRUE) AS is_active,
          s.start_time,
          s.end_time,
          s.updated_at,
-         COALESCE(s.mata_kuliah, 'PPK') AS mata_kuliah
+         COALESCE(s.mata_kuliah, 'PPK') AS mata_kuliah,
+         COALESCE(s.shuffle_questions, FALSE) AS shuffle_questions
        FROM (
          SELECT quiz_id, COUNT(*) AS total_questions
          FROM quiz_questions
