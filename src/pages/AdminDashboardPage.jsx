@@ -1383,7 +1383,7 @@ export function AdminDashboardPage() {
                   <th>Integritas / Kecurangan</th>
                   <th>Ringkasan Jawaban</th>
                   <th>Status & Nilai</th>
-                  {role !== 'PROCTOR' && <th className="no-print">Penilaian & Aksi</th>}
+                  {role !== 'PROCTOR' && <th className="no-print" style={{ minWidth: 260 }}>Penilaian & Aksi</th>}
                 </tr>
               </thead>
               <tbody>

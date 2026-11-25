@@ -744,7 +744,7 @@ app.get('/v1/quiz/list', async (req, res) => {
          GROUP BY quiz_id
        ) q
        FULL OUTER JOIN quiz_settings s ON s.quiz_id = q.quiz_id
-       ORDER BY COALESCE(q.quiz_id, s.quiz_id) ASC`
+       ORDER BY COALESCE(s.updated_at, s.start_time, '1970-01-01'::timestamptz) DESC, COALESCE(q.quiz_id, s.quiz_id) DESC`
     );
     res.json({ status: 'success', data: result.rows });
   } catch (err) {
@@ -753,7 +753,7 @@ app.get('/v1/quiz/list', async (req, res) => {
         `SELECT DISTINCT quiz_id, COUNT(*) AS total_questions 
          FROM quiz_questions 
          GROUP BY quiz_id 
-         ORDER BY quiz_id ASC`
+         ORDER BY quiz_id DESC`
       );
       res.json({ status: 'success', data: fallback.rows });
     } catch (fallbackErr) {

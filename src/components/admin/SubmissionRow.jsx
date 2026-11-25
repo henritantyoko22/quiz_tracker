@@ -338,8 +338,17 @@ export const SubmissionRow = memo(function SubmissionRow({
         )}
       </td>
       {role !== 'PROCTOR' && (
-        <td className="no-print" style={{ minWidth: 235 }}>
-          <div style={{ display: 'flex', gap: 5, marginBottom: 6, flexWrap: 'wrap' }}>
+        <td className="no-print" style={{ minWidth: 260, verticalAlign: 'middle' }}>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              marginBottom: 6,
+              width: '100%',
+              boxSizing: 'border-box',
+            }}
+          >
             <input
               type="number"
               min="0"
@@ -348,12 +357,16 @@ export const SubmissionRow = memo(function SubmissionRow({
               value={grade}
               onChange={(e) => setGrade(e.target.value)}
               style={{
-                width: 66,
-                padding: '5px 7px',
+                width: 58,
+                height: 30,
+                padding: '4px 6px',
                 borderRadius: 6,
                 border: '1px solid #cbd5e1',
-                fontSize: '0.8rem',
+                fontSize: '0.82rem',
                 fontWeight: 700,
+                textAlign: 'center',
+                boxSizing: 'border-box',
+                flexShrink: 0,
               }}
             />
             <button
@@ -361,6 +374,18 @@ export const SubmissionRow = memo(function SubmissionRow({
               className="btn btn-success btn-xs"
               onClick={handleSave}
               disabled={saving || autoGrading || deleting}
+              style={{
+                height: 30,
+                padding: '0 9px',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 4,
+                fontWeight: 700,
+                fontSize: '0.74rem',
+                whiteSpace: 'nowrap',
+                flexShrink: 0,
+              }}
             >
               {saving ? '...' : '💾 Simpan'}
             </button>
@@ -368,7 +393,20 @@ export const SubmissionRow = memo(function SubmissionRow({
               <button
                 type="button"
                 className="btn btn-xs"
-                style={{ background: '#7c3aed', color: '#ffffff' }}
+                style={{
+                  height: 30,
+                  padding: '0 8px',
+                  background: '#7c3aed',
+                  color: '#ffffff',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontWeight: 700,
+                  fontSize: '0.74rem',
+                  whiteSpace: 'nowrap',
+                  border: 'none',
+                  flexShrink: 0,
+                }}
                 onClick={handleAutoGrade}
                 disabled={saving || autoGrading || deleting}
                 title="Evaluasi otomatis jawaban ini menggunakan Gemini AI"
@@ -382,8 +420,22 @@ export const SubmissionRow = memo(function SubmissionRow({
                 className="btn btn-danger btn-xs"
                 onClick={handleDelete}
                 disabled={saving || autoGrading || deleting}
-                title="Hapus submission mahasiswa ini (misal mengerjakan asal-asalan)"
-                style={{ padding: '5px 8px' }}
+                title="Hapus submission mahasiswa ini (misal pengerjaan asal-asalan)"
+                style={{
+                  height: 30,
+                  width: 32,
+                  minWidth: 32,
+                  padding: 0,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  marginLeft: 'auto',
+                  borderRadius: 6,
+                  border: '1px solid #ef4444',
+                  boxShadow: '0 1px 2px rgba(239, 68, 68, 0.15)',
+                  cursor: 'pointer',
+                  flexShrink: 0,
+                }}
               >
                 {deleting ? '⏳' : '🗑️'}
               </button>
@@ -396,10 +448,12 @@ export const SubmissionRow = memo(function SubmissionRow({
             onChange={(e) => setFeedback(e.target.value)}
             style={{
               width: '100%',
-              padding: '5px 8px',
+              height: 28,
+              padding: '4px 8px',
               borderRadius: 6,
               border: '1px solid #cbd5e1',
               fontSize: '0.76rem',
+              boxSizing: 'border-box',
             }}
           />
         </td>

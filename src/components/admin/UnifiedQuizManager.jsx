@@ -1,9 +1,10 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { API_BASE, getAuthHeaders, toLocalISOString } from '../../services/api.js';
 
 export function UnifiedQuizManager({ token, quizList, onRefreshQuizList, showToast }) {
   const [selectedQuizId, setSelectedQuizId] = useState('');
   const [newQuizInput, setNewQuizInput] = useState('');
+  const [quizSearch, setQuizSearch] = useState('');
 
   // Timer & Schedule state
   const [durationMinutes, setDurationMinutes] = useState(30);
@@ -73,11 +74,42 @@ export function UnifiedQuizManager({ token, quizList, onRefreshQuizList, showToa
   const [jsonText, setJsonText] = useState('');
   const prevLoadedQuizIdRef = useRef('');
 
+  // Urutkan daftar kuis dari yang terbaru ke terlama berdasarkan updated_at / start_time
+  const sortedQuizList = useMemo(() => {
+    const list = [...(quizList || [])];
+    list.sort((a, b) => {
+      const aTime = a.updated_at
+        ? new Date(a.updated_at).getTime()
+        : a.start_time
+        ? new Date(a.start_time).getTime()
+        : 0;
+      const bTime = b.updated_at
+        ? new Date(b.updated_at).getTime()
+        : b.start_time
+        ? new Date(b.start_time).getTime()
+        : 0;
+      if (bTime !== aTime) return bTime - aTime;
+      return String(b.quiz_id).localeCompare(String(a.quiz_id));
+    });
+    return list;
+  }, [quizList]);
+
+  // Filter pencarian kuis di sidebar
+  const filteredSidebarQuizzes = useMemo(() => {
+    const q = quizSearch.trim().toLowerCase();
+    if (!q) return sortedQuizList;
+    return sortedQuizList.filter(
+      (item) =>
+        String(item.quiz_id).toLowerCase().includes(q) ||
+        String(item.mata_kuliah || '').toLowerCase().includes(q)
+    );
+  }, [sortedQuizList, quizSearch]);
+
   useEffect(() => {
-    if (!selectedQuizId && quizList.length > 0) {
-      setSelectedQuizId(String(quizList[0].quiz_id));
+    if (!selectedQuizId && sortedQuizList.length > 0) {
+      setSelectedQuizId(String(sortedQuizList[0].quiz_id));
     }
-  }, [quizList, selectedQuizId]);
+  }, [sortedQuizList, selectedQuizId]);
 
   const loadQuizDetails = useCallback(
     async (qId) => {
@@ -327,19 +359,65 @@ export function UnifiedQuizManager({ token, quizList, onRefreshQuizList, showToa
       {/* LEFT SIDEBAR: LIST OF CREATED QUIZ IDs */}
       <div className="quiz-sidebar">
         <div className="quiz-sidebar-header">
-          <div style={{ fontWeight: 700, fontSize: '0.86rem', color: '#0f172a' }}>
-            📚 Daftar Quiz ID ({quizList.length})
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div style={{ fontWeight: 800, fontSize: '0.88rem', color: '#0f172a' }}>
+              📚 Daftar Quiz ID ({sortedQuizList.length})
+            </div>
+            <span style={{ fontSize: '0.68rem', fontWeight: 700, color: '#6366f1', background: '#e0e7ff', padding: '1px 6px', borderRadius: 4 }}>
+              Terbaru di atas
+            </span>
           </div>
-          <div style={{ fontSize: '0.73rem', color: '#64748b', marginTop: 2 }}>
-            Klik ID Quiz di bawah untuk edit soal & timer
+          <div style={{ fontSize: '0.72rem', color: '#64748b', marginTop: 2 }}>
+            Pilih ID Quiz di bawah untuk edit soal & timer
           </div>
+
+          {/* Quick Search Quiz ID */}
+          <div style={{ position: 'relative', marginTop: 10, marginBottom: 8 }}>
+            <input
+              type="text"
+              placeholder="🔍 Cari Quiz ID / Matkul..."
+              value={quizSearch}
+              onChange={(e) => setQuizSearch(e.target.value)}
+              style={{
+                width: '100%',
+                padding: '6px 10px',
+                borderRadius: 7,
+                border: '1px solid #cbd5e1',
+                fontSize: '0.78rem',
+                background: '#ffffff',
+                boxSizing: 'border-box',
+              }}
+            />
+            {quizSearch && (
+              <button
+                type="button"
+                onClick={() => setQuizSearch('')}
+                style={{
+                  position: 'absolute',
+                  right: 8,
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  color: '#94a3b8',
+                  fontSize: '0.85rem',
+                  padding: 0,
+                }}
+              >
+                ✕
+              </button>
+            )}
+          </div>
+
+          {/* Form Buat ID Quiz Baru */}
           <form
             onSubmit={handleCreateNewQuizId}
-            style={{ display: 'flex', gap: 6, marginTop: 10 }}
+            style={{ display: 'flex', gap: 6 }}
           >
             <input
               type="text"
-              placeholder="Buat ID Quiz baru (mis: 102)..."
+              placeholder="+ Buat ID Quiz baru..."
               value={newQuizInput}
               onChange={(e) => setNewQuizInput(e.target.value)}
               style={{
@@ -347,50 +425,111 @@ export function UnifiedQuizManager({ token, quizList, onRefreshQuizList, showToa
                 padding: '6px 10px',
                 borderRadius: 7,
                 border: '1px solid #cbd5e1',
-                fontSize: '0.8rem',
+                fontSize: '0.78rem',
+                boxSizing: 'border-box',
               }}
             />
-            <button type="submit" className="btn btn-primary btn-xs">
+            <button type="submit" className="btn btn-primary btn-xs" style={{ whiteSpace: 'nowrap', fontWeight: 700 }}>
               + Buat
             </button>
           </form>
         </div>
 
         <div className="quiz-sidebar-list">
-          {quizList.length === 0 ? (
+          {filteredSidebarQuizzes.length === 0 ? (
             <div
               style={{
-                padding: 20,
+                padding: '24px 16px',
                 textAlign: 'center',
                 fontSize: '0.8rem',
                 color: '#94a3b8',
               }}
             >
-              Belum ada Quiz ID. Buat baru di atas.
+              {quizSearch ? 'Tidak ada Quiz ID yang cocok.' : 'Belum ada Quiz ID. Buat baru di atas.'}
             </div>
           ) : (
-            quizList.map((item) => {
+            filteredSidebarQuizzes.map((item, idx) => {
               const isSelected = String(item.quiz_id) === String(selectedQuizId);
+              const isLatest = idx === 0 && !quizSearch;
+              const courseName = String(item.mata_kuliah || 'PPK').toUpperCase();
+              const isIot = courseName.includes('IOT');
+              const isAlgo = courseName.includes('ALGO');
+
               return (
                 <div
                   key={item.quiz_id}
                   className={`quiz-list-item ${isSelected ? 'active' : ''}`}
                   onClick={() => setSelectedQuizId(String(item.quiz_id))}
+                  style={{
+                    position: 'relative',
+                    padding: '11px 13px',
+                    borderRadius: 10,
+                    marginBottom: 7,
+                    cursor: 'pointer',
+                    transition: 'all 0.16s ease',
+                    background: isSelected ? '#eef2ff' : '#ffffff',
+                    border: isSelected ? '1.5px solid #4f46e5' : '1px solid #e2e8f0',
+                    boxShadow: isSelected ? '0 2px 8px rgba(79, 70, 229, 0.14)' : 'none',
+                  }}
                 >
-                  <div>
-                    <div className="title">Quiz #{item.quiz_id}</div>
-                    <div className="meta">
-                      {item.total_questions || 0} Soal •{' '}
-                      {item.duration_minutes || 60} Menit
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 5 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                      <span style={{ fontWeight: 800, fontSize: '0.88rem', color: isSelected ? '#4338ca' : '#0f172a' }}>
+                        Quiz #{item.quiz_id}
+                      </span>
+                      {isLatest && (
+                        <span
+                          className="badge"
+                          style={{
+                            fontSize: '0.62rem',
+                            fontWeight: 900,
+                            background: '#fef3c7',
+                            color: '#b45309',
+                            border: '1px solid #fde68a',
+                            padding: '1px 5px',
+                          }}
+                        >
+                          ⚡ TERBARU
+                        </span>
+                      )}
                     </div>
+                    <span
+                      className={`badge ${item.is_active === false ? 'badge-danger' : 'badge-success'}`}
+                      style={{ fontSize: '0.68rem', fontWeight: 800 }}
+                    >
+                      {item.is_active === false ? 'TUTUP' : 'AKTIF'}
+                    </span>
                   </div>
-                  <span
-                    className={`badge ${
-                      item.is_active === false ? 'badge-danger' : 'badge-success'
-                    }`}
-                  >
-                    {item.is_active === false ? 'TUTUP' : 'AKTIF'}
-                  </span>
+
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 6 }}>
+                    <span
+                      style={{
+                        fontSize: '0.73rem',
+                        color: '#64748b',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 4,
+                      }}
+                    >
+                      <span>📝 {item.total_questions || 0} Soal</span>
+                      <span>•</span>
+                      <span>⏱️ {item.duration_minutes || 60}m</span>
+                    </span>
+
+                    <span
+                      className="badge"
+                      style={{
+                        fontSize: '0.66rem',
+                        fontWeight: 800,
+                        background: isIot ? '#e0f2fe' : isAlgo ? '#f3e8ff' : '#e0e7ff',
+                        color: isIot ? '#0369a1' : isAlgo ? '#7e22ce' : '#4338ca',
+                        border: `1px solid ${isIot ? '#bae6fd' : isAlgo ? '#e9d5ff' : '#c7d2fe'}`,
+                        padding: '1px 6px',
+                      }}
+                    >
+                      {isIot ? '📡 IoT' : isAlgo ? '🧬 Algo' : '📚 PPK'}
+                    </span>
+                  </div>
                 </div>
               );
             })
