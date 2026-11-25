@@ -231,13 +231,26 @@ export function ViolationLogModal({ sub, token, onClose }) {
         sub.nama || ''
       )}&nim=${encodeURIComponent(sub.nim || '')}&quizId=${encodeURIComponent(
         sub.quiz_id || ''
-      )}`,
+      )}&attempt=${encodeURIComponent(sub.attempt || 1)}`,
       { headers: getAuthHeaders(token) }
     )
       .then((r) => r.json())
       .then((res) => {
         if (active && res.status === 'success' && Array.isArray(res.data)) {
-          setLogs(res.data);
+          // Deduplikasi log jika ada event kembar dalam selang waktu < 3 detik
+          const unique = [];
+          for (const item of res.data) {
+            const itemTs = item.occurred_at ? new Date(item.occurred_at).getTime() : 0;
+            const isDupe = unique.some((prev) => {
+              const prevTs = prev.occurred_at ? new Date(prev.occurred_at).getTime() : 0;
+              return (
+                prev.violation_type === item.violation_type &&
+                Math.abs(itemTs - prevTs) < 3000
+              );
+            });
+            if (!isDupe) unique.push(item);
+          }
+          setLogs(unique);
         }
       })
       .catch(() => {})

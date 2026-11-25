@@ -776,13 +776,18 @@ export function StudentQuizPage() {
   const recordViolation = useCallback(
     (type, detail) => {
       if (!isExamActiveRef.current || isSubmittingRef.current) return;
+      // Jangan catat jika kuota pelanggaran sudah penuh / sudah mencapai diskualifikasi
+      if (countsRef.current.total >= countsRef.current.max) return;
 
       if (type === 'TAB_SWITCH') {
         countsRef.current.tab += 1;
       } else {
         countsRef.current.copy += 1;
       }
-      countsRef.current.total = countsRef.current.tab + countsRef.current.copy;
+      countsRef.current.total = Math.min(
+        countsRef.current.max,
+        countsRef.current.tab + countsRef.current.copy
+      );
       setViolationCount(countsRef.current.total);
 
       addToast(
@@ -790,7 +795,7 @@ export function StudentQuizPage() {
         'danger'
       );
 
-      // Log to /v1/violations in background (dengan proteksi examToken & NIM riil)
+      // Log to /v1/violations in background (dengan proteksi examToken, attempt & NIM riil)
       fetch(`${API_BASE}/v1/violations`, {
         method: 'POST',
         headers: {
@@ -801,6 +806,7 @@ export function StudentQuizPage() {
           userId: identityRef.current.name,
           nim: identityRef.current.nim,
           quizId: identityRef.current.quizId,
+          attempt: identityRef.current.attempt || 1,
           examToken: examTokenRef.current || '',
           type,
           detail,
@@ -1156,7 +1162,8 @@ export function StudentQuizPage() {
 
     if (isSplit) {
       setSplitScreenActive(true);
-      if (Date.now() - lastSplitWarnMsRef.current > 3500) {
+      // Cooldown 30 detik agar tidak spam penalti beruntun setiap 3 detik jika layar masih dalam split screen
+      if (Date.now() - lastSplitWarnMsRef.current > 30000) {
         lastSplitWarnMsRef.current = Date.now();
         recordViolation(
           'SPLIT_SCREEN',
@@ -1174,7 +1181,7 @@ export function StudentQuizPage() {
     let lastSwitchMs = 0;
 
     const onVisChange = () => {
-      if (document.hidden && Date.now() - lastSwitchMs > 1200) {
+      if (document.hidden && Date.now() - lastSwitchMs > 3000) {
         lastSwitchMs = Date.now();
         recordViolation('TAB_SWITCH', 'Berpindah tab browser atau minimize jendela');
       }
@@ -1182,13 +1189,13 @@ export function StudentQuizPage() {
 
     const onWindowBlur = () => {
       // Saat window kehilangan fokus (baik di desktop, split screen HP, maupun floating window AI):
-      // Tunggu 1200ms (debounce). Jika setelah 1.2 detik dokumen masih tidak memiliki fokus (!document.hasFocus()),
+      // Tunggu 1500ms (debounce). Jika setelah 1.5 detik dokumen masih tidak memiliki fokus (!document.hasFocus()),
       // maka mahasiswa sedang aktif berinteraksi dengan jendela / aplikasi lain (seperti ChatGPT di split screen).
       if (blurTimeoutRef.current) clearTimeout(blurTimeoutRef.current);
 
       blurTimeoutRef.current = setTimeout(() => {
-        // Jika dokumen benar-benar diminimize / disembunyikan, sudah dicatat oleh onVisChange
-        if (document.hidden) return;
+        // Jika dokumen benar-benar diminimize / disembunyikan atau baru saja ada tab switch, abaikan blur agar tidak dobel
+        if (document.hidden || Date.now() - lastSwitchMs < 4000) return;
 
         // Cek fokus dokumen (bekerja di Desktop, Split Screen HP, & Floating Window AI)
         const hasFocus = typeof document.hasFocus === 'function' ? document.hasFocus() : false;
@@ -1202,7 +1209,7 @@ export function StudentQuizPage() {
 
           if (isTyping) return;
 
-          if (Date.now() - lastSwitchMs > 1500) {
+          if (Date.now() - lastSwitchMs > 4000) {
             lastSwitchMs = Date.now();
             recordViolation(
               'SPLIT_SCREEN_BLUR',
@@ -1210,7 +1217,7 @@ export function StudentQuizPage() {
             );
           }
         }
-      }, 1200);
+      }, 1500);
     };
 
     const onWindowFocus = () => {

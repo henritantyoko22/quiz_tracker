@@ -517,6 +517,10 @@ async function initDbTables() {
       ALTER TABLE quiz_submissions 
       ADD COLUMN IF NOT EXISTS kelas VARCHAR(10);
     `);
+    await db.query(`
+      ALTER TABLE quiz_violations 
+      ADD COLUMN IF NOT EXISTS attempt INT DEFAULT 1;
+    `);
 
     // Kolom Geofencing / Validasi Lokasi Fisik di quiz_settings
     await db.query(`
@@ -1337,17 +1341,21 @@ app.post('/v1/quiz/submit', async (req, res) => {
 
     // 2. Otoritatif: Ambil batas pelanggaran dari database, BUKAN dari req.body client
     const serverMaxViolations = Number(settingsRecord.max_violations) || 3;
+    const attemptNum = parseInt(attempt) > 0 ? parseInt(attempt) : 1;
 
-    // 3. Otoritatif: Hitung pelanggaran riil yang tersimpan di database quiz_violations
+    // 3. Otoritatif: Hitung pelanggaran riil yang tersimpan di database quiz_violations HANYA untuk attempt sesi ini
     const vDbRes = await db.query(
-      `SELECT COUNT(*)::int AS count FROM quiz_violations WHERE (user_id = $1 OR user_id = $2) AND quiz_id = $3`,
-      [cleanNim, studentRecord.nama, cleanQuizId]
+      `SELECT COUNT(*)::int AS count FROM quiz_violations WHERE (user_id = $1 OR user_id = $2) AND quiz_id = $3 AND COALESCE(attempt, 1) = $4`,
+      [cleanNim, studentRecord.nama, cleanQuizId, attemptNum]
     );
     const dbViolationCount = vDbRes.rows[0]?.count || 0;
     const clientVCount = parseInt(violationCount) >= 0 ? parseInt(violationCount) : 0;
     
-    // Server-enforced: Ambil nilai terbesar antara catatan database dan client
-    const finalViolationCount = Math.max(dbViolationCount, clientVCount);
+    // Server-enforced: Ambil nilai terbesar antara catatan database dan client, dan batasi agar tidak overflow melebihi serverMaxViolations
+    let finalViolationCount = Math.max(dbViolationCount, clientVCount);
+    if (finalViolationCount > serverMaxViolations) {
+      finalViolationCount = serverMaxViolations;
+    }
 
     // 4. Server-enforced: Cegah manipulasi status oleh mahasiswa!
     // Jika pelanggaran >= batas toleransi server ATAU ada pelanggaran fatal (misal screenshot), paksa status DISQUALIFIED!
@@ -1374,7 +1382,6 @@ app.post('/v1/quiz/submit', async (req, res) => {
     const safeActLog = Array.isArray(activityLog) ? activityLog.slice(-100) : null;
     const qTimingsJson = safeQTimings ? JSON.stringify(safeQTimings) : null;
     const actLogJson = safeActLog ? JSON.stringify(safeActLog) : null;
-    const attemptNum = parseInt(attempt) > 0 ? parseInt(attempt) : 1;
 
     const uaHeader = req.headers['user-agent'] || req.body.browserInfo || '';
     const browserCheck = detectClientBrowser(uaHeader);
@@ -1462,7 +1469,7 @@ app.post('/v1/quiz/submit', async (req, res) => {
 
 // Catat log pelanggaran proctoring (dengan proteksi spoofing & validasi sesi)
 app.post('/v1/violations', async (req, res) => {
-  const { userId, nim, quizId, type, detail, url, examToken } = req.body;
+  const { userId, nim, quizId, type, detail, url, examToken, attempt } = req.body;
   const token = req.headers['x-exam-token'] || examToken;
 
   const cleanNim = String(nim || userId || '').trim();
@@ -1484,6 +1491,8 @@ app.post('/v1/violations', async (req, res) => {
     });
   }
 
+  const attemptNum = parseInt(attempt) > 0 ? parseInt(attempt) : (activeSession?.attempt || 1);
+
   // Whitelist jenis pelanggaran (termasuk pelanggaran fatal screenshot & split-screen)
   const allowedTypes = [
     'TAB_SWITCH', 'WINDOW_BLUR', 'COPY_PASTE', 'DEVTOOLS_OPEN',
@@ -1495,9 +1504,9 @@ app.post('/v1/violations', async (req, res) => {
 
   try {
     await db.query(
-      `INSERT INTO quiz_violations (user_id, quiz_id, violation_type, detail, page_url, occurred_at)
-       VALUES ($1, $2, $3, $4, $5, NOW())`,
-      [cleanNim, cleanQuizId, safeType, safeDetail, String(url || '').substring(0, 255)]
+      `INSERT INTO quiz_violations (user_id, quiz_id, violation_type, detail, page_url, attempt, occurred_at)
+       VALUES ($1, $2, $3, $4, $5, $6, NOW())`,
+      [cleanNim, cleanQuizId, safeType, safeDetail, String(url || '').substring(0, 255), attemptNum]
     );
 
     // Update counter di live session jika ada
@@ -2292,26 +2301,45 @@ app.get('/v1/admin/live/sessions/:nim/:quizId', authenticate, requireRole('SUPER
     constructedTimeline.sort((a, b) => a.timestamp - b.timestamp);
     session.activityLog = constructedTimeline;
   } else {
-    // Jika activityLog sudah ada, pastikan setiap record dari quiz_violations terdaftar
-    const existingTimes = new Set(rawLogs.map(l => l.timestampISO));
+    // Jika activityLog sudah ada, masukkan record quiz_violations yang belum tercatat (deduplikasi dalam toleransi 5 detik)
     for (const v of violationsList) {
-      const vIso = v.occurred_at ? new Date(v.occurred_at).toISOString() : null;
-      if (vIso && !existingTimes.has(vIso)) {
-        const vOccurred = new Date(v.occurred_at).getTime();
+      const vOccurred = v.occurred_at ? new Date(v.occurred_at).getTime() : startTs;
+      const vType = v.violation_type || 'VIOLATION';
+      const isAlreadyRecorded = rawLogs.some(l => 
+        l.type === 'VIOLATION' && (
+          Math.abs((l.timestamp || 0) - vOccurred) < 5000 ||
+          (l.questionText && l.questionText.includes(vType))
+        )
+      );
+      if (!isAlreadyRecorded) {
+        const vIso = v.occurred_at ? new Date(v.occurred_at).toISOString() : new Date(vOccurred).toISOString();
         const vElapsed = Math.max(0, Math.floor((vOccurred - startTs) / 1000));
         rawLogs.push({
           type: 'VIOLATION',
           questionNum: 1,
-          questionText: `⚠️ ${v.violation_type || 'VIOLATION'}: ${v.detail || 'Pelanggaran integritas'}`,
+          questionText: `⚠️ ${vType}: ${v.detail || 'Pelanggaran integritas'}`,
           elapsedSeconds: vElapsed,
           timestamp: vOccurred,
           timestampISO: vIso,
-          detail: v.detail || v.violation_type
+          detail: v.detail || vType
         });
       }
     }
-    rawLogs.sort((a, b) => a.timestamp - b.timestamp);
-    session.activityLog = rawLogs;
+
+    // Bersihkan duplikasi internal rawLogs jika ada event serupa dalam rentang 3 detik
+    rawLogs.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+    const dedupedLogs = [];
+    for (const item of rawLogs) {
+      const isDupe = dedupedLogs.some(prev => 
+        prev.type === item.type &&
+        (prev.questionText === item.questionText || prev.detail === item.detail) &&
+        Math.abs((prev.timestamp || 0) - (item.timestamp || 0)) < 3000
+      );
+      if (!isDupe) {
+        dedupedLogs.push(item);
+      }
+    }
+    session.activityLog = dedupedLogs;
   }
 
   let remainingSeconds = session.remainingSeconds;
@@ -2674,9 +2702,9 @@ app.get('/v1/admin/submissions', authenticate, async (req, res) => {
 
   const baseCteSql = `
     WITH viol_counts AS (
-      SELECT quiz_id, user_id, COUNT(*)::int AS cnt
+      SELECT quiz_id, user_id, COALESCE(attempt, 1) AS attempt, COUNT(*)::int AS cnt
       FROM quiz_violations
-      GROUP BY quiz_id, user_id
+      GROUP BY quiz_id, user_id, COALESCE(attempt, 1)
     ),
     base AS (
       SELECT
@@ -2705,7 +2733,10 @@ app.get('/v1/admin/submissions', authenticate, async (req, res) => {
           WHEN UPPER(COALESCE(stu.mata_kuliah, '')) LIKE '%ALGO%' THEN 'Algoritma Evolusioner'
           ELSE 'PPK'
         END AS mata_kuliah,
-        GREATEST(COALESCE(s.violation_count, 0), COALESCE(vn.cnt, 0) + COALESCE(vu.cnt, 0)) AS violation_count,
+        LEAST(
+          GREATEST(COALESCE(s.violation_count, 0), COALESCE(vn.cnt, 0) + COALESCE(vu.cnt, 0)),
+          COALESCE(s.max_violations, 3)
+        ) AS violation_count,
         COALESCE(s.max_violations, 3) AS max_violations,
         s.location_lat,
         s.location_lng,
@@ -2718,8 +2749,8 @@ app.get('/v1/admin/submissions', authenticate, async (req, res) => {
       FROM quiz_submissions s
       LEFT JOIN quiz_settings qs ON qs.quiz_id = s.quiz_id
       LEFT JOIN quiz_students stu ON stu.nim = s.nim
-      LEFT JOIN viol_counts vn ON vn.quiz_id = s.quiz_id AND vn.user_id = s.nim
-      LEFT JOIN viol_counts vu ON vu.quiz_id = s.quiz_id AND vu.user_id = s.user_id AND s.user_id IS DISTINCT FROM s.nim
+      LEFT JOIN viol_counts vn ON vn.quiz_id = s.quiz_id AND vn.user_id = s.nim AND vn.attempt = COALESCE(s.attempt, 1)
+      LEFT JOIN viol_counts vu ON vu.quiz_id = s.quiz_id AND vu.user_id = s.user_id AND vu.attempt = COALESCE(s.attempt, 1) AND s.user_id IS DISTINCT FROM s.nim
     )
   `;
 
@@ -3015,16 +3046,18 @@ app.post('/v1/admin/submissions/bulk-delete', authenticate, requireRole('SUPERAD
 
 // Detail audit log pelanggaran per mahasiswa
 app.get('/v1/admin/violations/detail', authenticate, async (req, res) => {
-  const { userId, nim, quizId } = req.query;
+  const { userId, nim, quizId, attempt } = req.query;
   const cleanQuizId = String(quizId || '').trim();
+  const attemptNum = parseInt(attempt) > 0 ? parseInt(attempt) : 0;
   try {
     const result = await db.query(
-      `SELECT id, user_id, quiz_id, violation_type, detail, page_url, occurred_at
+      `SELECT id, user_id, quiz_id, violation_type, detail, page_url, occurred_at, COALESCE(attempt, 1) AS attempt
        FROM quiz_violations
        WHERE (user_id = $1 OR user_id = $2)
          AND ($3 = '' OR quiz_id = $3)
+         AND ($4::int = 0 OR COALESCE(attempt, 1) = $4::int)
        ORDER BY occurred_at ASC`,
-      [userId || '', nim || '', cleanQuizId]
+      [userId || '', nim || '', cleanQuizId, attemptNum]
     );
     res.json({ status: 'success', data: result.rows });
   } catch (err) {
