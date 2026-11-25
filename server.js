@@ -2312,11 +2312,58 @@ app.delete('/v1/admin/live/sessions/cleanup', authenticate, requireRole('SUPERAD
 // 2. ENDPOINT AUTENTIKASI & MANAJEMEN ROLE PENGGUNA
 // -------------------------------------------------------------
 
-// Login Admin dengan Verifikasi Password Hash Dinamis (Bukan Hardcoded)
+// Rate Limiter untuk Login Admin (Mencegah Brute-force: Maksimal 5x percobaan per IP dalam 15 menit)
+const loginAttemptMap = new Map();
+const MAX_LOGIN_ATTEMPTS = 5;
+const LOGIN_BLOCK_WINDOW_MS = 15 * 60 * 1000;
+
+function checkLoginRateLimit(ip) {
+  const now = Date.now();
+  const record = loginAttemptMap.get(ip);
+  if (!record) return { allowed: true };
+  if (record.blockedUntil && record.blockedUntil > now) {
+    const remainingSec = Math.ceil((record.blockedUntil - now) / 1000);
+    return { allowed: false, remainingSec };
+  }
+  if (now - record.firstAttempt > LOGIN_BLOCK_WINDOW_MS) {
+    loginAttemptMap.delete(ip);
+    return { allowed: true };
+  }
+  if (record.count >= MAX_LOGIN_ATTEMPTS) {
+    record.blockedUntil = now + LOGIN_BLOCK_WINDOW_MS;
+    return { allowed: false, remainingSec: Math.ceil(LOGIN_BLOCK_WINDOW_MS / 1000) };
+  }
+  return { allowed: true };
+}
+
+function recordFailedLogin(ip) {
+  const now = Date.now();
+  const record = loginAttemptMap.get(ip) || { count: 0, firstAttempt: now };
+  record.count += 1;
+  if (record.count >= MAX_LOGIN_ATTEMPTS) {
+    record.blockedUntil = now + LOGIN_BLOCK_WINDOW_MS;
+  }
+  loginAttemptMap.set(ip, record);
+}
+
+function clearFailedLogin(ip) {
+  loginAttemptMap.delete(ip);
+}
+
+// Login Admin dengan Verifikasi Password Hash Dinamis & HttpOnly Cookie Anti-Leak
 app.post('/v1/admin/login', async (req, res) => {
   const { username, password } = req.body;
   if (!username || !password) {
     return res.status(400).json({ status: 'error', message: 'Username dan password wajib diisi!' });
+  }
+
+  const clientIp = (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket.remoteAddress || 'unknown';
+  const rateCheck = checkLoginRateLimit(clientIp);
+  if (!rateCheck.allowed) {
+    return res.status(429).json({
+      status: 'error',
+      message: `Terlalu banyak percobaan login gagal. Demi keamanan, IP diblokir sementara selama ${rateCheck.remainingSec} detik.`
+    });
   }
 
   const cleanUser = username.trim().toLowerCase();
@@ -2343,14 +2390,19 @@ app.post('/v1/admin/login', async (req, res) => {
     }
 
     if (!user) {
+      recordFailedLogin(clientIp);
       return res.status(401).json({ status: 'error', message: 'Username atau password salah!' });
     }
 
     // Verifikasi Password Hash
     const isValid = verifyPassword(password, user.password_hash, user.salt);
     if (!isValid) {
+      recordFailedLogin(clientIp);
       return res.status(401).json({ status: 'error', message: 'Username atau password salah!' });
     }
+
+    // Login sukses: bersihkan catatan percobaan gagal
+    clearFailedLogin(clientIp);
 
     // Buat session token kriptografis stateless (bertahan meski serverless restart)
     const sessionData = {
@@ -2363,12 +2415,15 @@ app.post('/v1/admin/login', async (req, res) => {
     activeSessions.set(token, { ...sessionData, loginAt: new Date() });
 
     // Set HttpOnly Secure Cookie (Mencegah pencurian token via XSS DevTools)
-    res.setHeader('Set-Cookie', `admin_token=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800`);
+    const isHttps = req.secure || req.headers['x-forwarded-proto'] === 'https';
+    const secureFlag = isHttps ? '; Secure' : '';
+    res.setHeader('Set-Cookie', `admin_token=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800${secureFlag}`);
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
 
+    // KEAMANAN TINGKAT TINGGI: JANGAN PERNAH kembalikan token JWT di body JSON response!
+    // Token hanya tersimpan di HttpOnly Cookie yang tidak bisa dibaca oleh JavaScript / XSS ataupun diinspeksi di body JSON.
     res.json({
       status: 'success',
-      token,
       user: {
         username: user.username,
         fullName: user.full_name,
@@ -2383,7 +2438,11 @@ app.post('/v1/admin/login', async (req, res) => {
 // Endpoint Logout (Membersihkan cookie HttpOnly & token di session)
 app.post('/v1/admin/logout', (req, res) => {
   const authHeader = req.headers['authorization'] || req.headers['x-admin-token'];
-  const token = authHeader ? authHeader.replace(/^Bearer\s+/i, '').trim() : null;
+  let token = authHeader ? authHeader.replace(/^Bearer\s+/i, '').trim() : null;
+  if (!token && req.headers['cookie']) {
+    const match = req.headers['cookie'].match(/(?:^|;\s*)admin_token=([^;]+)/);
+    if (match) token = decodeURIComponent(match[1]);
+  }
   if (token) activeSessions.delete(token);
   res.setHeader('Set-Cookie', 'admin_token=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0');
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');

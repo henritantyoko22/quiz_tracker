@@ -12,13 +12,53 @@ import {
 } from '../components/admin/AdminModals.jsx';
 
 export function AdminDashboardPage() {
-  const [token, setToken] = useState(() => localStorage.getItem('adminToken') || '');
+  const [token, setToken] = useState(() => localStorage.getItem('adminToken') || (localStorage.getItem('adminUser') ? 'COOKIE_AUTH' : ''));
   const [role, setRole] = useState(
     () => (localStorage.getItem('adminRole') || 'DOSEN').toUpperCase()
   );
   const [username, setUsername] = useState(
     () => localStorage.getItem('adminUser') || ''
   );
+  const [checkingAuth, setCheckingAuth] = useState(true);
+
+  // Verifikasi HttpOnly Cookie secara otomatis pada server saat halaman dibuka
+  useEffect(() => {
+    let isMounted = true;
+    async function verifyAuth() {
+      try {
+        const res = await fetch(`${API_BASE}/v1/admin/me`, {
+          credentials: 'include',
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.user) {
+            if (isMounted) {
+              setToken('COOKIE_AUTH');
+              setRole((data.user.role || 'DOSEN').toUpperCase());
+              setUsername(data.user.fullName || data.user.full_name || data.user.username || '');
+              localStorage.setItem('adminRole', (data.user.role || 'DOSEN').toUpperCase());
+              localStorage.setItem('adminUser', data.user.fullName || data.user.full_name || data.user.username || '');
+              localStorage.removeItem('adminToken'); // Hapus token lama jika ada di localStorage
+            }
+            return;
+          }
+        }
+        // Jika token tidak valid / sesi habis
+        if (isMounted) {
+          setToken('');
+          localStorage.removeItem('adminToken');
+          localStorage.removeItem('adminRole');
+          localStorage.removeItem('adminUser');
+        }
+      } catch (_) {
+        // Abaikan kendala jaringan sementara
+      } finally {
+        if (isMounted) setCheckingAuth(false);
+      }
+    }
+    verifyAuth();
+    return () => { isMounted = false; };
+  }, []);
 
   // Login form state
   const [loginUser, setLoginUser] = useState('');
@@ -89,6 +129,7 @@ export function AdminDashboardPage() {
       fetch(`${API_BASE}/v1/admin/logout`, {
         method: 'POST',
         headers: getAuthHeaders(token),
+        credentials: 'include',
       }).catch(() => {});
     } catch (_) {}
     localStorage.removeItem('adminToken');
@@ -107,19 +148,20 @@ export function AdminDashboardPage() {
       const res = await fetch(`${API_BASE}/v1/admin/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({ username: loginUser, password: loginPass }),
       });
       const data = await res.json();
-      if (res.ok && data.token) {
-        const userRole = ((data.user && data.user.role) || data.role || 'DOSEN').toUpperCase();
+      if (res.ok && data.status === 'success' && data.user) {
+        const userRole = ((data.user && data.user.role) || 'DOSEN').toUpperCase();
         const userName =
           (data.user && (data.user.fullName || data.user.username)) ||
-          data.username ||
           loginUser;
-        localStorage.setItem('adminToken', data.token);
+        // JANGAN simpan adminToken di localStorage demi keamanan!
+        localStorage.removeItem('adminToken');
         localStorage.setItem('adminRole', userRole);
         localStorage.setItem('adminUser', userName);
-        setToken(data.token);
+        setToken('COOKIE_AUTH');
         setRole(userRole);
         setUsername(userName);
       } else {
@@ -924,6 +966,17 @@ export function AdminDashboardPage() {
     URL.revokeObjectURL(url);
     showToast(`Berhasil mengekspor format JSON untuk AI (${exportRows.length} data)!`, 'success');
   };
+
+  if (checkingAuth && !username) {
+    return (
+      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#f8fafc' }}>
+        <div style={{ textAlign: 'center', color: '#64748b', fontSize: '0.88rem', fontWeight: 600 }}>
+          <div style={{ fontSize: '2rem', marginBottom: 8 }}>🛡️</div>
+          Memverifikasi sesi aman...
+        </div>
+      </div>
+    );
+  }
 
   if (!token) {
     return (

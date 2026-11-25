@@ -5,10 +5,14 @@
 export const API_BASE = window.location.origin;
 
 export function getAuthHeaders(token) {
-  return {
+  const headers = {
     'Content-Type': 'application/json',
-    Authorization: `Bearer ${token || localStorage.getItem('adminToken') || ''}`,
   };
+  const t = token && token !== 'COOKIE_AUTH' ? token : localStorage.getItem('adminToken');
+  if (t && t !== 'COOKIE_AUTH') {
+    headers.Authorization = `Bearer ${t}`;
+  }
+  return headers;
 }
 
 export function formatDuration(sec) {
