@@ -1846,7 +1846,7 @@ app.get('/v1/admin/live/sessions', authenticate, requireRole('SUPERADMIN', 'PROC
       FROM quiz_live_sessions l
       LEFT JOIN quiz_submissions s ON (s.nim = l.nim OR s.user_id = l.nim) AND s.quiz_id = l.quiz_id
       LEFT JOIN quiz_settings q ON q.quiz_id = l.quiz_id
-      WHERE l.last_heartbeat >= NOW() - INTERVAL '48 hours' OR l.started_at >= NOW() - INTERVAL '48 hours'
+      WHERE l.status = 'ACTIVE' OR l.last_heartbeat >= NOW() - INTERVAL '2 hours'
       ORDER BY l.started_at DESC;
     `;
     const dbLiveRes = await db.query(liveQuery);

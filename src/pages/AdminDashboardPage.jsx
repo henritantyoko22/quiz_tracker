@@ -1019,7 +1019,7 @@ export function AdminDashboardPage() {
               className={`nav-tab ${activeTab === 'LIVE' ? 'active' : ''}`}
               onClick={() => setActiveTab('LIVE')}
             >
-              <span className="live-dot online" /> Live Monitoring ({stats.activeOnline} Online / {filteredLiveSessions.length})
+              <span className="live-dot online" /> Live Monitoring ({stats.activeOnline})
             </button>
           )}
           {(role === 'SUPERADMIN' || role === 'DOSEN') && (
@@ -1240,7 +1240,7 @@ export function AdminDashboardPage() {
               </div>
             ) : (
               <div>
-                Memantau <strong style={{ color: '#0f172a' }}>{filteredLiveSessions.length}</strong> sesi live mahasiswa ({courseFilter === 'ALL' ? 'Semua Mata Kuliah' : courseFilter}).
+                Memantau <strong style={{ color: '#0f172a' }}>{stats.activeOnline}</strong> mahasiswa sedang aktif mengerjakan ({courseFilter === 'ALL' ? 'Semua Mata Kuliah' : courseFilter}).
               </div>
             )}
 
@@ -1575,12 +1575,14 @@ export function AdminDashboardPage() {
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontWeight: 700, fontSize: '0.88rem', color: '#0f172a' }}>
                 <span className="live-dot online" /> Live Proctoring Terpusat
               </span>
-              <span className="badge badge-success" style={{ fontSize: '0.75rem', fontWeight: 700 }}>
+              <span className={`badge ${stats.activeOnline > 0 ? 'badge-success' : 'badge-neutral'}`} style={{ fontSize: '0.75rem', fontWeight: 700 }}>
                 🟢 {stats.activeOnline} Sedang Mengerjakan
               </span>
-              <span className="badge badge-info" style={{ fontSize: '0.75rem', fontWeight: 700 }}>
-                ✅ {filteredLiveSessions.filter(s => s.status === 'SUBMITTED' || s.status === 'COMPLETED').length} Selesai Submit
-              </span>
+              {filteredLiveSessions.filter(s => s.status === 'SUBMITTED' || s.status === 'COMPLETED').length > 0 && (
+                <span className="badge badge-info" style={{ fontSize: '0.75rem', fontWeight: 700 }}>
+                  ✅ {filteredLiveSessions.filter(s => s.status === 'SUBMITTED' || s.status === 'COMPLETED').length} Selesai Submit
+                </span>
+              )}
               {filteredLiveSessions.filter(s => s.status === 'TIME_EXPIRED').length > 0 && (
                 <span className="badge badge-warn" style={{ fontSize: '0.75rem', fontWeight: 700 }}>
                   ⏱️ {filteredLiveSessions.filter(s => s.status === 'TIME_EXPIRED').length} Waktu Habis
@@ -1591,9 +1593,6 @@ export function AdminDashboardPage() {
                   🚨 {filteredLiveSessions.filter(s => s.status === 'DISQUALIFIED').length} Diskualifikasi
                 </span>
               )}
-              <span className="badge badge-neutral" style={{ fontSize: '0.75rem', fontWeight: 700 }}>
-                👥 Total Terpantau: {filteredLiveSessions.length} Mahasiswa
-              </span>
             </div>
 
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
