@@ -623,6 +623,41 @@ async function initDbTables() {
       );
     `);
 
+    // Tabel Sesi Live Proctoring (Tersinkronisasi Terpusat Lintas Seluruh Instance Serverless)
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS quiz_live_sessions (
+        session_key VARCHAR(150) PRIMARY KEY,
+        nim VARCHAR(50) NOT NULL,
+        nama VARCHAR(150) NOT NULL,
+        quiz_id VARCHAR(100) NOT NULL,
+        kelas VARCHAR(20) DEFAULT '-',
+        attempt INT DEFAULT 1,
+        mata_kuliah VARCHAR(100) DEFAULT 'PPK',
+        status VARCHAR(50) DEFAULT 'ACTIVE',
+        current_question_index INT DEFAULT 0,
+        current_question_text TEXT,
+        total_questions INT DEFAULT 0,
+        remaining_seconds INT,
+        violation_count INT DEFAULT 0,
+        location_status VARCHAR(50) DEFAULT 'NOT_RECORDED',
+        location_lat NUMERIC(10, 6),
+        location_lng NUMERIC(10, 6),
+        location_distance_meters INT,
+        location_accuracy_meters INT,
+        browser_info VARCHAR(100),
+        device_info VARCHAR(100),
+        started_at TIMESTAMPTZ DEFAULT NOW(),
+        last_heartbeat TIMESTAMPTZ DEFAULT NOW(),
+        finished_at TIMESTAMPTZ,
+        question_timings JSONB,
+        activity_log JSONB,
+        client_ip VARCHAR(50)
+      );
+    `);
+    await db.query(`CREATE INDEX IF NOT EXISTS idx_live_quiz_id ON quiz_live_sessions (quiz_id);`);
+    await db.query(`CREATE INDEX IF NOT EXISTS idx_live_heartbeat ON quiz_live_sessions (last_heartbeat DESC);`);
+    await db.query(`CREATE INDEX IF NOT EXISTS idx_live_status ON quiz_live_sessions (status);`);
+
     // Indeks performa database agar query dashboard ribuan submission tetap instan (< 15ms)
     await db.query(`CREATE INDEX IF NOT EXISTS idx_submissions_submitted_at ON quiz_submissions (submitted_at DESC);`);
     await db.query(`CREATE INDEX IF NOT EXISTS idx_submissions_quiz_id ON quiz_submissions (quiz_id);`);
@@ -1372,7 +1407,7 @@ app.post('/v1/quiz/submit', async (req, res) => {
       });
     }
 
-    // Update live session status
+    // Update live session status in memory & database
     const liveKey = getLiveSessionKey(cleanNim, cleanQuizId);
     let liveSession = liveStudentSessions.get(liveKey);
     const nowTs = Date.now();
@@ -1386,6 +1421,15 @@ app.post('/v1/quiz/submit', async (req, res) => {
       if (safeQTimings) liveSession.questionTimings = safeQTimings;
       if (safeActLog) liveSession.activityLog = safeActLog;
     }
+
+    // Sinkronkan status akhir ujian ke tabel database quiz_live_sessions
+    try {
+      await db.query(`
+        UPDATE quiz_live_sessions
+        SET status = $2, finished_at = NOW(), remaining_seconds = 0, violation_count = $3
+        WHERE session_key = $1
+      `, [liveKey, finalStatus, finalViolationCount]);
+    } catch (_) {}
 
     res.json({ status: 'success', message: 'Jawaban ujian berhasil disimpan.' });
   } catch (err) {
@@ -1563,6 +1607,39 @@ app.post('/v1/quiz/live/session', async (req, res) => {
       clientIp
     });
 
+    // Simpan juga ke database PostgreSQL agar tersinkronisasi lintas seluruh instance serverless
+    try {
+      await db.query(`
+        INSERT INTO quiz_live_sessions (
+          session_key, nim, nama, quiz_id, kelas, attempt, mata_kuliah, status,
+          current_question_index, current_question_text, total_questions, remaining_seconds,
+          violation_count, location_status, location_lat, location_lng, location_distance_meters,
+          location_accuracy_meters, browser_info, device_info, started_at, last_heartbeat, client_ip
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, NOW(), NOW(), $21)
+        ON CONFLICT (session_key) DO UPDATE SET
+          status = 'ACTIVE',
+          started_at = NOW(),
+          last_heartbeat = NOW(),
+          finished_at = NULL,
+          kelas = EXCLUDED.kelas,
+          attempt = EXCLUDED.attempt,
+          mata_kuliah = EXCLUDED.mata_kuliah,
+          location_status = EXCLUDED.location_status,
+          browser_info = EXCLUDED.browser_info,
+          device_info = EXCLUDED.device_info,
+          client_ip = EXCLUDED.client_ip;
+      `, [
+        key, cleanNim, studentRecord.nama || userId || cleanNim, cleanQuizId, studentKelas, Number(attempt) || 1, liveCourse, 'ACTIVE',
+        0, safeQTexts[0] || 'Soal 1', totalQuestions || safeQTexts.length || 0, null,
+        0, initialLocationStatus, locationLat !== undefined ? locationLat : null, locationLng !== undefined ? locationLng : null,
+        locationDistance !== undefined ? locationDistance : null, locationAccuracy !== undefined ? locationAccuracy : null,
+        browserCheck.name, /Mobile|Android|iPhone|iPad/i.test(ua) ? 'Mobile' : 'Desktop', clientIp
+      ]);
+    } catch (dbLiveErr) {
+      console.warn('DB Live Session save warning:', dbLiveErr.message);
+    }
+
     const token = generateExamToken(cleanNim, cleanQuizId);
     res.json({ status: 'success', token });
   } catch (err) {
@@ -1676,108 +1753,205 @@ app.post('/v1/quiz/live/heartbeat', (req, res) => {
   }
 
   liveStudentSessions.set(key, existing);
+
+  // Sync secara asinkron ke tabel quiz_live_sessions agar tersinkronisasi terpusat lintas seluruh instance serverless
+  db.query(`
+    INSERT INTO quiz_live_sessions (
+      session_key, nim, nama, quiz_id, status, current_question_index, current_question_text,
+      total_questions, remaining_seconds, violation_count, location_status, location_lat,
+      location_lng, location_distance_meters, location_accuracy_meters, client_ip,
+      last_heartbeat, started_at, question_timings, activity_log
+    ) VALUES (
+      $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NOW(), NOW(), $17, $18
+    )
+    ON CONFLICT (session_key) DO UPDATE SET
+      status = EXCLUDED.status,
+      current_question_index = EXCLUDED.current_question_index,
+      current_question_text = EXCLUDED.current_question_text,
+      remaining_seconds = EXCLUDED.remaining_seconds,
+      violation_count = EXCLUDED.violation_count,
+      location_status = EXCLUDED.location_status,
+      location_lat = COALESCE(EXCLUDED.location_lat, quiz_live_sessions.location_lat),
+      location_lng = COALESCE(EXCLUDED.location_lng, quiz_live_sessions.location_lng),
+      location_distance_meters = COALESCE(EXCLUDED.location_distance_meters, quiz_live_sessions.location_distance_meters),
+      location_accuracy_meters = COALESCE(EXCLUDED.location_accuracy_meters, quiz_live_sessions.location_accuracy_meters),
+      client_ip = EXCLUDED.client_ip,
+      last_heartbeat = NOW(),
+      finished_at = CASE WHEN EXCLUDED.status != 'ACTIVE' AND quiz_live_sessions.finished_at IS NULL THEN NOW() ELSE quiz_live_sessions.finished_at END,
+      question_timings = EXCLUDED.question_timings,
+      activity_log = EXCLUDED.activity_log;
+  `, [
+    key,
+    cleanNim,
+    existing.nama || userId || cleanNim,
+    cleanQuizId,
+    existing.status,
+    existing.currentQuestionIndex || 0,
+    existing.currentQuestionText || '',
+    existing.totalQuestions || 0,
+    existing.remainingSeconds !== undefined ? existing.remainingSeconds : null,
+    existing.violationCount || 0,
+    existing.locationStatus || 'NOT_RECORDED',
+    existing.locationLat !== undefined ? existing.locationLat : null,
+    existing.locationLng !== undefined ? existing.locationLng : null,
+    existing.locationDistance !== undefined ? existing.locationDistance : null,
+    existing.locationAccuracy !== undefined ? existing.locationAccuracy : null,
+    clientIp,
+    JSON.stringify(existing.questionTimings || []),
+    JSON.stringify(existing.activityLog || [])
+  ]).catch(err => {
+    // Non-blocking warning jika database busy
+  });
+
   res.json({ status: 'success' });
 });
 
 // Ambil semua sesi live (SUPERADMIN & PROCTOR)
-// Secara default hanya mengembalikan yang statusnya 'ACTIVE' (sedang mengerjakan)
+// Terhubung terpusat ke database PostgreSQL quiz_live_sessions + fallback memory
 app.get('/v1/admin/live/sessions', authenticate, requireRole('SUPERADMIN', 'PROCTOR'), async (req, res) => {
-  const showAll = req.query.all === 'true'; // opsional jika ingin melihat riwayat yang baru selesai
-  const cutoff = Date.now() - 2 * 60 * 60 * 1000;
-  const sessions = [];
+  const showOnlyActive = req.query.active_only === 'true';
+  const sessionMap = new Map();
 
-  // 1. Cek dari database apakah ada mahasiswa yang sudah resmi submit
-  const dbSubmittedMap = new Map();
+  // 1. Ambil semua sesi dari database PostgreSQL terpusat (lintas seluruh instance serverless)
   try {
-    const subResult = await db.query('SELECT nim, quiz_id, status FROM quiz_submissions');
-    for (const row of subResult.rows) {
-      dbSubmittedMap.set(getLiveSessionKey(row.nim, row.quiz_id), row.status || 'SUBMITTED');
-    }
-  } catch (dbErr) {
-    // Abaikan jika DB offline
-  }
+    const liveQuery = `
+      SELECT 
+        l.session_key,
+        l.nim,
+        l.nama,
+        l.quiz_id AS "quizId",
+        l.kelas,
+        l.attempt,
+        l.mata_kuliah AS "mataKuliah",
+        COALESCE(s.status, l.status) AS status,
+        l.current_question_index AS "currentQuestionIndex",
+        l.current_question_text AS "currentQuestionText",
+        l.total_questions AS "totalQuestions",
+        l.remaining_seconds AS "remainingSeconds",
+        GREATEST(COALESCE(s.violation_count, 0), l.violation_count) AS "violationCount",
+        COALESCE(s.location_status, l.location_status) AS "locationStatus",
+        COALESCE(s.location_lat, l.location_lat) AS "locationLat",
+        COALESCE(s.location_lng, l.location_lng) AS "locationLng",
+        COALESCE(s.location_distance_meters, l.location_distance_meters) AS "locationDistance",
+        COALESCE(s.location_accuracy_meters, l.location_accuracy_meters) AS "locationAccuracy",
+        COALESCE(s.browser_info, l.browser_info) AS "browserInfo",
+        COALESCE(s.device_info, l.device_info) AS "deviceInfo",
+        l.started_at AS "startedAt",
+        l.last_heartbeat AS "lastHeartbeat",
+        COALESCE(s.submitted_at, l.finished_at) AS "finishedAt",
+        COALESCE(s.duration_seconds, 0) AS "submissionDurationSeconds",
+        l.client_ip AS "clientIp",
+        q.duration_minutes AS "durationMinutes",
+        q.end_time AS "endTime"
+      FROM quiz_live_sessions l
+      LEFT JOIN quiz_submissions s ON (s.nim = l.nim OR s.user_id = l.nim) AND s.quiz_id = l.quiz_id
+      LEFT JOIN quiz_settings q ON q.quiz_id = l.quiz_id
+      WHERE l.last_heartbeat >= NOW() - INTERVAL '48 hours' OR l.started_at >= NOW() - INTERVAL '48 hours'
+      ORDER BY l.started_at DESC;
+    `;
+    const dbLiveRes = await db.query(liveQuery);
+    for (const row of dbLiveRes.rows) {
+      const startedTs = row.startedAt ? new Date(row.startedAt).getTime() : Date.now();
+      const heartbeatTs = row.lastHeartbeat ? new Date(row.lastHeartbeat).getTime() : startedTs;
+      const finishedTs = row.finishedAt ? new Date(row.finishedAt).getTime() : null;
 
-  // 2. Ambil quiz_settings untuk mengecek batas waktu maksimal (duration_minutes & end_time)
-  const quizSettingsMap = new Map();
-  try {
-    const setRes = await db.query('SELECT quiz_id, duration_minutes, end_time FROM quiz_settings');
-    for (const r of setRes.rows) {
-      quizSettingsMap.set(String(r.quiz_id).trim(), {
-        durationMinutes: parseInt(r.duration_minutes) || 60,
-        endTime: r.end_time ? new Date(r.end_time).getTime() : null
+      let totalElapsed = 0;
+      if (Number(row.submissionDurationSeconds) > 0) {
+        totalElapsed = Number(row.submissionDurationSeconds);
+      } else if (finishedTs) {
+        totalElapsed = Math.max(0, Math.floor((finishedTs - startedTs) / 1000));
+      } else {
+        totalElapsed = Math.max(0, Math.floor((Date.now() - startedTs) / 1000));
+      }
+
+      const maxSeconds = (parseInt(row.durationMinutes) || 60) * 60;
+      const isEndTimePassed = row.endTime && (Date.now() > new Date(row.endTime).getTime());
+
+      let finalStatus = row.status || 'ACTIVE';
+      if (finalStatus === 'ACTIVE' && (totalElapsed >= (maxSeconds + 30) || isEndTimePassed)) {
+        finalStatus = 'TIME_EXPIRED';
+      }
+
+      let remainingSec = row.remainingSeconds;
+      if (finalStatus === 'ACTIVE') {
+        const calculatedRemaining = Math.max(0, maxSeconds - totalElapsed);
+        remainingSec = (remainingSec !== null && remainingSec !== undefined)
+          ? Math.min(remainingSec, calculatedRemaining)
+          : calculatedRemaining;
+      } else {
+        remainingSec = 0;
+      }
+
+      sessionMap.set(row.session_key, {
+        key: row.session_key,
+        nim: row.nim,
+        nama: row.nama,
+        studentName: row.nama,
+        quizId: row.quizId,
+        kelas: row.kelas || '-',
+        attempt: Number(row.attempt) || 1,
+        mataKuliah: row.mataKuliah || 'PPK',
+        status: finalStatus,
+        currentQuestionIndex: Number(row.currentQuestionIndex) || 0,
+        currentQuestionText: row.currentQuestionText || '',
+        totalQuestions: Number(row.totalQuestions) || 0,
+        remainingSeconds: remainingSec,
+        violationCount: Number(row.violationCount) || 0,
+        locationStatus: row.locationStatus || 'NOT_RECORDED',
+        locationLat: row.locationLat,
+        locationLng: row.locationLng,
+        locationDistance: row.locationDistance,
+        locationAccuracy: row.locationAccuracy,
+        browserInfo: row.browserInfo,
+        deviceInfo: row.deviceInfo,
+        clientIp: row.clientIp,
+        startedAt: startedTs,
+        startedAtISO: new Date(startedTs).toISOString(),
+        lastHeartbeat: heartbeatTs,
+        lastHeartbeatISO: new Date(heartbeatTs).toISOString(),
+        finishedAt: finishedTs,
+        finishedAtISO: finishedTs ? new Date(finishedTs).toISOString() : null,
+        totalElapsedSeconds: totalElapsed
       });
     }
-  } catch (e) {}
+  } catch (dbErr) {
+    console.warn('DB Live Sessions fetch warning:', dbErr.message);
+  }
 
-  for (const [, session] of liveStudentSessions.entries()) {
-    const key = session.key || getLiveSessionKey(session.nim, session.quizId);
-
-    // Jika di database sudah ada record submit, paksa status sesi live jadi SUBMITTED!
-    if (dbSubmittedMap.has(key)) {
-      const dbStatus = dbSubmittedMap.get(key);
-      session.status = dbStatus || 'SUBMITTED';
-      if (!session.finishedAt) {
-        session.finishedAt = Date.now();
-        session.finishedAtISO = new Date().toISOString();
+  // 2. Gabungkan dengan data memory instance ini jika ada heartbeat lebih baru
+  for (const [, memSession] of liveStudentSessions.entries()) {
+    const key = memSession.key || getLiveSessionKey(memSession.nim, memSession.quizId);
+    const existing = sessionMap.get(key);
+    if (!existing || (memSession.lastHeartbeat && memSession.lastHeartbeat > (existing.lastHeartbeat || 0))) {
+      let totalElapsed = 0;
+      if (memSession.finishedAt) {
+        totalElapsed = Math.max(0, Math.floor((memSession.finishedAt - memSession.startedAt) / 1000));
+      } else {
+        totalElapsed = Math.max(0, Math.floor((Date.now() - memSession.startedAt) / 1000));
       }
-      session.remainingSeconds = 0;
-    }
 
-    // Hitung total waktu pengerjaan:
-    // Jika sudah selesai: waktu antara startedAt sampai finishedAt
-    // Jika masih aktif: waktu antara startedAt sampai sekarang (Date.now())
-    let totalElapsed = 0;
-    if (session.finishedAt) {
-      totalElapsed = Math.max(0, Math.floor((session.finishedAt - session.startedAt) / 1000));
-    } else {
-      totalElapsed = Math.max(0, Math.floor((Date.now() - session.startedAt) / 1000));
-    }
-
-    // Cek batas waktu durasi kuis:
-    // Jika waktu pengerjaan sudah melebihi durasi kuis (misal 15 menit + 30 detik toleransi) atau melewati end_time,
-    // dan status masih ACTIVE, maka waktu pengerjaan otomatis HABIS (TIME_EXPIRED)!
-    const setting = quizSettingsMap.get(String(session.quizId).trim());
-    const maxSeconds = setting ? setting.durationMinutes * 60 : 3600;
-    const isEndTimePassed = setting && setting.endTime && (Date.now() > setting.endTime);
-
-    if (session.status === 'ACTIVE' && (totalElapsed >= (maxSeconds + 30) || isEndTimePassed)) {
-      session.status = 'TIME_EXPIRED';
-      session.finishedAt = Date.now();
-      session.finishedAtISO = new Date().toISOString();
-      session.remainingSeconds = 0;
-    }
-
-    // Hitung sisa waktu real-time
-    let remainingSeconds = session.remainingSeconds;
-    if (session.status === 'ACTIVE') {
-      const calculatedRemaining = Math.max(0, maxSeconds - totalElapsed);
-      remainingSeconds = (remainingSeconds !== null && remainingSeconds !== undefined)
-        ? Math.min(remainingSeconds, calculatedRemaining)
-        : calculatedRemaining;
-    } else {
-      remainingSeconds = 0;
-    }
-
-    const payload = {
-      ...session,
-      totalElapsedSeconds: totalElapsed,
-      remainingSeconds: remainingSeconds
-    };
-
-    // Jika tidak minta all, HANYA masukkan yang benar-benar masih ACTIVE
-    if (!showAll) {
-      if (session.status === 'ACTIVE') {
-        sessions.push(payload);
-      }
-    } else {
-      if (session.lastHeartbeat >= cutoff || session.status === 'ACTIVE') {
-        sessions.push(payload);
-      }
+      sessionMap.set(key, {
+        ...(existing || {}),
+        ...memSession,
+        studentName: memSession.nama || existing?.studentName || memSession.nim,
+        totalElapsedSeconds: totalElapsed
+      });
     }
   }
 
-  // Urutkan berdasarkan startedAt terbaru
-  sessions.sort((a, b) => b.startedAt - a.startedAt);
+  // 3. Konversi ke array dan filter jika diminta hanya yang aktif
+  let sessions = Array.from(sessionMap.values());
+  if (showOnlyActive) {
+    sessions = sessions.filter(s => s.status === 'ACTIVE');
+  }
+
+  // Urutkan: Peserta yang masih ONLINE/ACTIVE di atas, lalu berdasarkan startedAt terbaru
+  sessions.sort((a, b) => {
+    const aActive = a.status === 'ACTIVE' ? 1 : 0;
+    const bActive = b.status === 'ACTIVE' ? 1 : 0;
+    if (aActive !== bActive) return bActive - aActive;
+    return (b.startedAt || 0) - (a.startedAt || 0);
+  });
 
   res.json({ status: 'success', data: sessions, total: sessions.length });
 });
@@ -1860,8 +2034,49 @@ app.get('/v1/admin/live/sessions/:nim/:quizId', authenticate, requireRole('SUPER
     }
   } catch (e) {}
 
-  if (!session && !dbRow) {
+  // Ambil record dari quiz_live_sessions jika in-memory tidak ada pada instance ini
+  let liveDbRow = null;
+  try {
+    const liveRes = await db.query(
+      `SELECT * FROM quiz_live_sessions WHERE (nim = $1 OR nama = $1) AND quiz_id = $2 LIMIT 1`,
+      [cleanNim, cleanQuizId]
+    );
+    if (liveRes.rows.length > 0) {
+      liveDbRow = liveRes.rows[0];
+    }
+  } catch (le) {}
+
+  if (!session && !dbRow && !liveDbRow) {
     return res.status(404).json({ status: 'error', message: 'Sesi tidak ditemukan atau sudah kedaluwarsa.' });
+  }
+
+  // Jika tidak ada di memory tapi ada di quiz_live_sessions, jadikan basis session
+  if (!session && liveDbRow) {
+    session = {
+      key: liveDbRow.session_key,
+      nama: liveDbRow.nama,
+      nim: liveDbRow.nim,
+      quizId: liveDbRow.quiz_id,
+      startedAt: liveDbRow.started_at ? new Date(liveDbRow.started_at).getTime() : Date.now(),
+      startedAtISO: liveDbRow.started_at ? new Date(liveDbRow.started_at).toISOString() : new Date().toISOString(),
+      finishedAt: liveDbRow.finished_at ? new Date(liveDbRow.finished_at).getTime() : null,
+      finishedAtISO: liveDbRow.finished_at ? new Date(liveDbRow.finished_at).toISOString() : null,
+      currentQuestionIndex: liveDbRow.current_question_index || 0,
+      currentQuestionText: liveDbRow.current_question_text || '',
+      questionTimings: safeJsonParse(liveDbRow.question_timings, []),
+      activityLog: safeJsonParse(liveDbRow.activity_log, []),
+      violationCount: liveDbRow.violation_count || 0,
+      remainingSeconds: liveDbRow.remaining_seconds,
+      status: liveDbRow.status || 'ACTIVE',
+      locationStatus: liveDbRow.location_status,
+      locationLat: liveDbRow.location_lat,
+      locationLng: liveDbRow.location_lng,
+      locationDistance: liveDbRow.location_distance_meters,
+      locationAccuracy: liveDbRow.location_accuracy_meters,
+      browserInfo: liveDbRow.browser_info,
+      deviceInfo: liveDbRow.device_info,
+      clientIp: liveDbRow.client_ip
+    };
   }
 
   // Tentukan waktu submit dan durasi

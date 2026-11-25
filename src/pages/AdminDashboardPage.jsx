@@ -43,6 +43,8 @@ export function AdminDashboardPage() {
   });
   const [quizList, setQuizList] = useState([]);
   const [liveSessions, setLiveSessions] = useState([]);
+  const [lastLiveSyncTime, setLastLiveSyncTime] = useState(null);
+  const [liveRefreshing, setLiveRefreshing] = useState(false);
   const [loadingData, setLoadingData] = useState(false);
 
   // Selection state for Bulk Delete
@@ -311,10 +313,11 @@ export function AdminDashboardPage() {
     [loadSubmissionDetail]
   );
 
-  const fetchLiveSessions = useCallback(async () => {
+  const fetchLiveSessions = useCallback(async (isManual = false) => {
     if (!token || (role !== 'SUPERADMIN' && role !== 'PROCTOR')) return;
+    if (isManual) setLiveRefreshing(true);
     try {
-      const res = await fetch(`${API_BASE}/v1/admin/live/sessions`, {
+      const res = await fetch(`${API_BASE}/v1/admin/live/sessions?all=true`, {
         headers: getAuthHeaders(token),
       });
       if (res.status === 401) {
@@ -325,8 +328,12 @@ export function AdminDashboardPage() {
       const rows = data.data || data.sessions || [];
       if (res.ok && Array.isArray(rows)) {
         setLiveSessions(rows);
+        setLastLiveSyncTime(new Date());
       }
-    } catch (_) {}
+    } catch (_) {
+    } finally {
+      if (isManual) setLiveRefreshing(false);
+    }
   }, [token, role, handleLogout]);
 
   useEffect(() => {
@@ -350,11 +357,15 @@ export function AdminDashboardPage() {
     setSelectedIds([]);
   }, [currentPage, pageSize, courseFilter, quizFilter, classFilter, statusFilter, violationFilter, debouncedSearch, sortKey]);
 
-  // Sinkronisasi data live hanya saat berpindah ke tab LIVE (tanpa polling otomatis berulang di background)
+  // Auto-polling real-time setiap 4 detik saat berada di tab LIVE
   useEffect(() => {
     if (!token || (role !== 'SUPERADMIN' && role !== 'PROCTOR')) return;
     if (activeTab === 'LIVE') {
       fetchLiveSessions();
+      const intervalId = setInterval(() => {
+        fetchLiveSessions();
+      }, 4000);
+      return () => clearInterval(intervalId);
     }
   }, [token, role, activeTab, fetchLiveSessions]);
 
@@ -1008,7 +1019,7 @@ export function AdminDashboardPage() {
               className={`nav-tab ${activeTab === 'LIVE' ? 'active' : ''}`}
               onClick={() => setActiveTab('LIVE')}
             >
-              <span className="live-dot online" /> Live Monitoring ({stats.activeOnline})
+              <span className="live-dot online" /> Live Monitoring ({stats.activeOnline} Online / {filteredLiveSessions.length})
             </button>
           )}
           {(role === 'SUPERADMIN' || role === 'DOSEN') && (
@@ -1547,6 +1558,63 @@ export function AdminDashboardPage() {
 
       {activeTab === 'LIVE' && (
         <div className="workspace-panel">
+          {/* Header Kontrol & Status Auto-Sync Real-Time */}
+          <div style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            flexWrap: 'wrap',
+            gap: 12,
+            marginBottom: 16,
+            padding: '12px 16px',
+            background: '#f8fafc',
+            borderRadius: 10,
+            border: '1px solid #e2e8f0'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontWeight: 700, fontSize: '0.88rem', color: '#0f172a' }}>
+                <span className="live-dot online" /> Live Proctoring Terpusat
+              </span>
+              <span className="badge badge-success" style={{ fontSize: '0.75rem', fontWeight: 700 }}>
+                🟢 {stats.activeOnline} Sedang Mengerjakan
+              </span>
+              <span className="badge badge-info" style={{ fontSize: '0.75rem', fontWeight: 700 }}>
+                ✅ {filteredLiveSessions.filter(s => s.status === 'SUBMITTED' || s.status === 'COMPLETED').length} Selesai Submit
+              </span>
+              {filteredLiveSessions.filter(s => s.status === 'TIME_EXPIRED').length > 0 && (
+                <span className="badge badge-warn" style={{ fontSize: '0.75rem', fontWeight: 700 }}>
+                  ⏱️ {filteredLiveSessions.filter(s => s.status === 'TIME_EXPIRED').length} Waktu Habis
+                </span>
+              )}
+              {filteredLiveSessions.filter(s => s.status === 'DISQUALIFIED').length > 0 && (
+                <span className="badge badge-danger" style={{ fontSize: '0.75rem', fontWeight: 700 }}>
+                  🚨 {filteredLiveSessions.filter(s => s.status === 'DISQUALIFIED').length} Diskualifikasi
+                </span>
+              )}
+              <span className="badge badge-neutral" style={{ fontSize: '0.75rem', fontWeight: 700 }}>
+                👥 Total Terpantau: {filteredLiveSessions.length} Mahasiswa
+              </span>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span style={{ fontSize: '0.75rem', color: '#64748b', display: 'flex', alignItems: 'center', gap: 5 }}>
+                <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#22c55e', display: 'inline-block' }}></span>
+                Auto-Sync Aktif (4s) {lastLiveSyncTime ? `• ${lastLiveSyncTime.toLocaleTimeString()}` : ''}
+              </span>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => fetchLiveSessions(true)}
+                disabled={liveRefreshing}
+                style={{ fontSize: '0.78rem', display: 'flex', alignItems: 'center', gap: 5 }}
+                title="Segarkan data sesi live mahasiswa langsung dari database"
+              >
+                <span>{liveRefreshing ? '⏳' : '🔄'}</span>
+                <span>{liveRefreshing ? 'Menyinkronkan...' : 'Segarkan'}</span>
+              </button>
+            </div>
+          </div>
+
           <div className="table-scroll-container">
             <table className="data-table">
               <thead>
