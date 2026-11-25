@@ -3,6 +3,44 @@ import { API_BASE, formatDuration } from '../services/api.js';
 import { StickyExamHeader } from '../components/quiz/StickyExamHeader.jsx';
 import { QuestionCard } from '../components/quiz/QuestionCard.jsx';
 
+// Generator deterministik lokal untuk sampling & shuffle kuota soal jika koneksi HP mahasiswa offline/glitch
+function getClientAssignedQuestions(allQuestions, nim, quizId, attempt = 1, questionCount = 0, shuffle = false) {
+  if (!Array.isArray(allQuestions) || allQuestions.length === 0) return [];
+  const labeled = allQuestions.map((q, idx) => ({
+    ...q,
+    original_number: q.original_number || (idx + 1),
+  }));
+
+  const targetCount =
+    Number(questionCount) > 0 && Number(questionCount) < labeled.length
+      ? Number(questionCount)
+      : labeled.length;
+
+  if (!shuffle && targetCount === labeled.length) {
+    return labeled;
+  }
+
+  const cleanSeed = `${String(nim || 'default').trim()}_${String(quizId || 'quiz').trim()}_att${attempt || 1}`;
+  let h = 0x811c9dc5;
+  for (let i = 0; i < cleanSeed.length; i++) {
+    h ^= cleanSeed.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  let s = h >>> 0;
+  const rng = () => {
+    s = (s * 1664525 + 1013904223) >>> 0;
+    return s / 4294967296;
+  };
+
+  let pool = [...labeled];
+  for (let i = pool.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [pool[i], pool[j]] = [pool[j], pool[i]];
+  }
+
+  return pool.slice(0, targetCount);
+}
+
 export function StudentQuizPage() {
   // Stages: LOGIN | EXAM | FINISHED
   const [stage, setStage] = useState('LOGIN');
@@ -886,6 +924,7 @@ export function StudentQuizPage() {
 
     // Ambil daftar butir soal spesifik untuk NIM mahasiswa ini (dengan sampling & shuffle jika aktif)
     let assignedQuestions = scheduleState.questions || [];
+    let fetchSuccess = false;
     try {
       const qStudentRes = await fetch(
         `${API_BASE}/v1/quiz/questions/${encodeURIComponent(cleanQuizId)}?nim=${encodeURIComponent(cleanNim)}&attempt=${attemptNum}`
@@ -894,6 +933,7 @@ export function StudentQuizPage() {
         const qStudentData = await qStudentRes.json();
         if (Array.isArray(qStudentData.data) && qStudentData.data.length > 0) {
           assignedQuestions = qStudentData.data;
+          fetchSuccess = true;
           setScheduleState((prev) => ({
             ...prev,
             questions: assignedQuestions,
@@ -901,6 +941,25 @@ export function StudentQuizPage() {
         }
       }
     } catch (_) {}
+
+    // Safeguard Kuota Soal: Jika fetch gagal atau jaringan seluler bermasalah,
+    // JANGAN PERNAH meloloskan seluruh bank soal jika kuota question_count aktif!
+    const targetQCount = Number(settings.question_count) || 0;
+    const isShuffle = Boolean(settings.shuffle_questions);
+    if (!fetchSuccess && ((targetQCount > 0 && assignedQuestions.length > targetQCount) || isShuffle)) {
+      assignedQuestions = getClientAssignedQuestions(
+        assignedQuestions,
+        cleanNim,
+        cleanQuizId,
+        attemptNum,
+        targetQCount,
+        isShuffle
+      );
+      setScheduleState((prev) => ({
+        ...prev,
+        questions: assignedQuestions,
+      }));
+    }
 
     const questions = assignedQuestions;
     const durationMs = (Number(settings.duration_minutes) || 60) * 60 * 1000;

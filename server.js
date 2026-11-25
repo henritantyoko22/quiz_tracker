@@ -963,6 +963,22 @@ app.post('/v1/admin/quiz/settings', authenticate, requireRole('SUPERADMIN', 'DOS
        RETURNING *`,
       [quizId.trim(), start, end, duration, maxV, active, rubric, isAuto, key, model, reqLoc, tLat, tLng, tRadius, tLocName, courseName, qCount, isShuffle]
     );
+    // Jika kuis ditutup (active === false), otomatis expire seluruh sesi live kuis ini
+    if (active === false) {
+      db.query(
+        `UPDATE quiz_live_sessions 
+         SET status = 'TIME_EXPIRED', finished_at = COALESCE(finished_at, last_heartbeat) 
+         WHERE quiz_id = $1 AND status = 'ACTIVE'`,
+        [quizId.trim()]
+      ).catch(() => {});
+
+      for (const [key, session] of liveStudentSessions.entries()) {
+        if (session.quizId === quizId.trim() && session.status === 'ACTIVE') {
+          session.status = 'TIME_EXPIRED';
+        }
+      }
+    }
+
     res.json({
       status: 'success',
       message: `Jadwal & timer kuis ${quizId} berhasil disimpan ke database!`,
@@ -1849,7 +1865,8 @@ app.get('/v1/admin/live/sessions', authenticate, requireRole('SUPERADMIN', 'PROC
         COALESCE(s.duration_seconds, 0) AS "submissionDurationSeconds",
         l.client_ip AS "clientIp",
         q.duration_minutes AS "durationMinutes",
-        q.end_time AS "endTime"
+        q.end_time AS "endTime",
+        q.is_active AS "isQuizActive"
       FROM quiz_live_sessions l
       LEFT JOIN quiz_submissions s ON (s.nim = l.nim OR s.user_id = l.nim) AND s.quiz_id = l.quiz_id
       LEFT JOIN quiz_settings q ON q.quiz_id = l.quiz_id
@@ -1857,6 +1874,19 @@ app.get('/v1/admin/live/sessions', authenticate, requireRole('SUPERADMIN', 'PROC
       ORDER BY l.started_at DESC;
     `;
     const dbLiveRes = await db.query(liveQuery);
+
+    // Jalankan auto-cleanup database secara asinkron untuk sesi basi / kuis yang sudah ditutup
+    db.query(`
+      UPDATE quiz_live_sessions
+      SET status = 'TIME_EXPIRED', finished_at = COALESCE(finished_at, last_heartbeat)
+      WHERE status = 'ACTIVE'
+        AND (
+          last_heartbeat < NOW() - INTERVAL '3 minutes'
+          OR quiz_id IN (SELECT quiz_id FROM quiz_settings WHERE is_active = FALSE)
+          OR quiz_id NOT IN (SELECT quiz_id FROM quiz_settings)
+        )
+    `).catch(() => {});
+
     for (const row of dbLiveRes.rows) {
       const startedTs = row.startedAt ? new Date(row.startedAt).getTime() : Date.now();
       const heartbeatTs = row.lastHeartbeat ? new Date(row.lastHeartbeat).getTime() : startedTs;
@@ -1873,10 +1903,16 @@ app.get('/v1/admin/live/sessions', authenticate, requireRole('SUPERADMIN', 'PROC
 
       const maxSeconds = (parseInt(row.durationMinutes) || 60) * 60;
       const isEndTimePassed = row.endTime && (Date.now() > new Date(row.endTime).getTime());
+      const isQuizClosed = row.isQuizActive === false || row.isQuizActive === null;
+      const isHeartbeatStale = (Date.now() - heartbeatTs) > 2 * 60 * 1000; // > 2 menit tidak mengirim heartbeat
 
       let finalStatus = row.status || 'ACTIVE';
-      if (finalStatus === 'ACTIVE' && (totalElapsed >= (maxSeconds + 30) || isEndTimePassed)) {
-        finalStatus = 'TIME_EXPIRED';
+      if (finalStatus === 'ACTIVE') {
+        if (isQuizClosed || isEndTimePassed || totalElapsed >= (maxSeconds + 30)) {
+          finalStatus = 'TIME_EXPIRED';
+        } else if (isHeartbeatStale) {
+          finalStatus = 'OFFLINE';
+        }
       }
 
       let remainingSec = row.remainingSeconds;
