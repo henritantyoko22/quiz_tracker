@@ -85,6 +85,9 @@ export function StudentQuizPage() {
     status: 'NOT_RECORDED',
   });
   const [splitScreenActive, setSplitScreenActive] = useState(false);
+  const [fullscreenExited, setFullscreenExited] = useState(false);
+  const typingVelocityRef = useRef({});
+  const lastDevtoolsWarnMsRef = useRef(0);
   const blurTimeoutRef = useRef(null);
   const lastSplitWarnMsRef = useRef(0);
   const identityRef = useRef({
@@ -840,6 +843,20 @@ export function StudentQuizPage() {
     [addToast, sendHeartbeat, executeSubmitQuiz]
   );
 
+  // Helper Meminta Mode Layar Penuh (Fullscreen)
+  const enterFullscreen = useCallback(() => {
+    try {
+      const docEl = document.documentElement;
+      if (docEl.requestFullscreen) {
+        docEl.requestFullscreen().catch(() => {});
+      } else if (docEl.webkitRequestFullscreen) {
+        docEl.webkitRequestFullscreen();
+      } else if (docEl.msRequestFullscreen) {
+        docEl.msRequestFullscreen();
+      }
+    } catch (_) {}
+  }, []);
+
   // Start Exam Handler
   const handleStartExam = async (e) => {
     e.preventDefault();
@@ -1017,6 +1034,7 @@ export function StudentQuizPage() {
 
     setAnswers(restoredAnswers);
     setRemainingSec(Math.max(0, Math.ceil((deadlineMs - Date.now()) / 1000)));
+    enterFullscreen();
     setStage('EXAM');
   };
 
@@ -1163,29 +1181,51 @@ export function StudentQuizPage() {
       setTimeout(evaluateSplitScreen, 500);
     };
 
-    // Deteksi Tombol / Shortcut Screenshot & Tangkapan Layar
-    const onKeyDetectScreenshot = (e) => {
-      // 1. Tombol PrintScreen (Windows / Linux / Keyboard Fisik)
+    const isFullscreenSupported = typeof document !== 'undefined' && !!(
+      document.fullscreenEnabled ||
+      document.webkitFullscreenEnabled ||
+      document.mozFullScreenEnabled ||
+      document.msFullscreenEnabled
+    );
+
+    const onFullscreenChange = () => {
+      const isCurrentlyFs = !!(
+        document.fullscreenElement ||
+        document.webkitFullscreenElement ||
+        document.mozFullScreenElement ||
+        document.msFullscreenElement
+      );
+      if (!isCurrentlyFs && isExamActiveRef.current && !isSubmittingRef.current && isFullscreenSupported) {
+        setFullscreenExited(true);
+        recordViolation(
+          'FULLSCREEN_EXIT',
+          'Keluar dari mode Layar Penuh (Fullscreen Exit). Ujian wajib dikerjakan dalam satu layar penuh.'
+        );
+      } else if (isCurrentlyFs) {
+        setFullscreenExited(false);
+      }
+    };
+
+    // Deteksi Keyboard: Shortcut Screenshot, DevTools / Inspect Element
+    const onKeyDetectSecurity = (e) => {
+      // 1. Screenshot & Tangkapan Layar
       const isPrintScreen =
         e.key === 'PrintScreen' ||
         e.code === 'PrintScreen' ||
         e.keyCode === 44 ||
         e.which === 44;
 
-      // 2. Windows Snipping Tool: Win + Shift + S atau Ctrl + Shift + S
       const isWindowsSnippet =
         e.shiftKey &&
         (e.metaKey || e.ctrlKey || e.altKey) &&
         (e.key === 's' || e.key === 'S' || e.code === 'KeyS');
 
-      // 3. macOS Screenshot Shortcuts: Cmd + Shift + 3 / 4 / 5 / 6
       const isMacScreenshot =
         e.metaKey &&
         e.shiftKey &&
         (['3', '4', '5', '6'].includes(e.key) ||
           ['Digit3', 'Digit4', 'Digit5', 'Digit6'].includes(e.code));
 
-      // 4. Print to PDF / Save as PDF dialog: Ctrl + P atau Cmd + P
       const isPrintCommand =
         (e.ctrlKey || e.metaKey) &&
         (e.key === 'p' || e.key === 'P' || e.code === 'KeyP');
@@ -1205,6 +1245,66 @@ export function StudentQuizPage() {
             ? 'Menekan shortcut Tangkapan Layar macOS (Cmd + Shift + 3/4/5)'
             : 'Mencoba mencetak / menyimpan soal ke PDF (Ctrl/Cmd + P)'
         );
+        return;
+      }
+
+      // 2. DevTools & Inspect Element Shortcuts
+      const isF12 = e.key === 'F12' || e.keyCode === 123;
+      const isInspect =
+        (e.ctrlKey || e.metaKey) &&
+        (e.shiftKey || e.altKey) &&
+        (e.key === 'i' || e.key === 'I' || e.code === 'KeyI');
+      const isConsole =
+        (e.ctrlKey || e.metaKey) &&
+        (e.shiftKey || e.altKey) &&
+        (e.key === 'j' || e.key === 'J' || e.code === 'KeyJ');
+      const isInspectPicker =
+        (e.ctrlKey || e.metaKey) &&
+        (e.shiftKey || e.altKey) &&
+        (e.key === 'c' || e.key === 'C' || e.code === 'KeyC');
+      const isViewSource =
+        (e.ctrlKey || e.metaKey) &&
+        (e.key === 'u' || e.key === 'U' || e.code === 'KeyU');
+      const isSavePage =
+        (e.ctrlKey || e.metaKey) &&
+        (e.key === 's' || e.key === 'S' || e.code === 'KeyS');
+
+      if (isF12 || isInspect || isConsole || isInspectPicker || isViewSource || isSavePage) {
+        try {
+          e.preventDefault();
+          e.stopPropagation();
+        } catch (_) {}
+
+        const devtoolsDetail = isF12
+          ? 'Menekan tombol F12 (Inspect Element)'
+          : isInspect
+          ? 'Menekan shortcut Inspect Element (Ctrl/Cmd + Shift/Opt + I)'
+          : isConsole
+          ? 'Menekan shortcut Console Developer (Ctrl/Cmd + Shift/Opt + J)'
+          : isInspectPicker
+          ? 'Menekan shortcut Selector Inspect (Ctrl/Cmd + Shift/Opt + C)'
+          : isViewSource
+          ? 'Menekan shortcut View Source (Ctrl/Cmd + U)'
+          : 'Menekan shortcut Save Page (Ctrl/Cmd + S)';
+
+        recordViolation('DEVTOOLS_OPENED', devtoolsDetail);
+        return;
+      }
+    };
+
+    // Deteksi jika DevTools dibuka docked di samping atau bawah layar
+    const checkDevToolsDocked = () => {
+      const threshold = 160;
+      const widthDiff = window.outerWidth - window.innerWidth;
+      const heightDiff = window.outerHeight - window.innerHeight;
+      if ((widthDiff > threshold || heightDiff > threshold) && isExamActiveRef.current && !isSubmittingRef.current) {
+        if (Date.now() - lastDevtoolsWarnMsRef.current > 12000) {
+          lastDevtoolsWarnMsRef.current = Date.now();
+          recordViolation(
+            'DEVTOOLS_OPENED',
+            'Terdeteksi jendela Developer Tools / Inspect Element terbuka di browser.'
+          );
+        }
       }
     };
 
@@ -1226,53 +1326,174 @@ export function StudentQuizPage() {
     window.addEventListener('blur', onWindowBlur);
     window.addEventListener('focus', onWindowFocus);
     window.addEventListener('resize', onResize);
-    window.addEventListener('keydown', onKeyDetectScreenshot, true);
-    window.addEventListener('keyup', onKeyDetectScreenshot, true);
+    window.addEventListener('keydown', onKeyDetectSecurity, true);
+    window.addEventListener('keyup', onKeyDetectSecurity, true);
     window.addEventListener('beforeprint', onBeforePrint);
     window.addEventListener('contextmenu', onContextMenu);
+    document.addEventListener('fullscreenchange', onFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', onFullscreenChange);
 
-    const splitInterval = setInterval(evaluateSplitScreen, 2500);
+    const monitorInterval = setInterval(() => {
+      evaluateSplitScreen();
+      checkDevToolsDocked();
+    }, 2500);
 
     return () => {
       if (blurTimeoutRef.current) clearTimeout(blurTimeoutRef.current);
-      clearInterval(splitInterval);
+      clearInterval(monitorInterval);
       document.removeEventListener('visibilitychange', onVisChange);
       window.removeEventListener('blur', onWindowBlur);
       window.removeEventListener('focus', onWindowFocus);
       window.removeEventListener('resize', onResize);
-      window.removeEventListener('keydown', onKeyDetectScreenshot, true);
-      window.removeEventListener('keyup', onKeyDetectScreenshot, true);
+      window.removeEventListener('keydown', onKeyDetectSecurity, true);
+      window.removeEventListener('keyup', onKeyDetectSecurity, true);
       window.removeEventListener('beforeprint', onBeforePrint);
       window.removeEventListener('contextmenu', onContextMenu);
+      document.removeEventListener('fullscreenchange', onFullscreenChange);
+      document.removeEventListener('webkitfullscreenchange', onFullscreenChange);
     };
   }, [stage, recordViolation, evaluateSplitScreen, triggerFatalScreenshotViolation, addToast]);
 
   // Question Change & Auto-Save to localStorage
-  const handleAnswerChange = useCallback((qNum, text) => {
-    setAnswers((prev) => {
-      const next = { ...prev, [qNum]: text };
-      answersRef.current = next;
-      try {
-        const draftKey = `quiz_draft_${identityRef.current.nim}_${identityRef.current.quizId}`;
-        localStorage.setItem(
-          draftKey,
-          JSON.stringify({
-            sessionStartMs: sessionStartMsRef.current,
-            answers: next,
-            updatedAt: Date.now(),
-          })
+  const handleAnswerChange = useCallback(
+    (qNum, text) => {
+      const safeText = String(text || '');
+      const now = Date.now();
+      const prev = typingVelocityRef.current[qNum] || {
+        len: (answersRef.current[qNum] || '').length,
+        time: now,
+      };
+      const deltaLen = safeText.length - prev.len;
+      const deltaTime = Math.max(1, now - prev.time);
+      typingVelocityRef.current[qNum] = { len: safeText.length, time: now };
+
+      // Deteksi Kecepatan Ketik Tidak Wajar (Injeksi Jawaban AI / Auto-Fill Script)
+      // Jika teks bertambah secara instan (> 75 karakter dalam < 350ms):
+      if (
+        deltaLen > 75 &&
+        deltaTime < 350 &&
+        isExamActiveRef.current &&
+        !isSubmittingRef.current
+      ) {
+        recordViolation(
+          'AI_TYPING_ANOMALY',
+          `Injeksi jawaban instan tidak wajar (+${deltaLen} karakter dalam ${deltaTime}ms). Terindikasi bot / ekstensi AI.`
         );
-        setSaveStatus(
-          `Tersimpan ${new Date().toLocaleTimeString('id-ID', {
-            hour: '2-digit',
-            minute: '2-digit',
-            second: '2-digit',
-          })}`
-        );
-      } catch (_) {}
-      return next;
+      }
+
+      setAnswers((prev) => {
+        const next = { ...prev, [qNum]: safeText };
+        answersRef.current = next;
+        try {
+          const draftKey = `quiz_draft_${identityRef.current.nim}_${identityRef.current.quizId}`;
+          localStorage.setItem(
+            draftKey,
+            JSON.stringify({
+              sessionStartMs: sessionStartMsRef.current,
+              answers: next,
+              updatedAt: Date.now(),
+            })
+          );
+          setSaveStatus(
+            `Tersimpan ${new Date().toLocaleTimeString('id-ID', {
+              hour: '2-digit',
+              minute: '2-digit',
+              second: '2-digit',
+            })}`
+          );
+        } catch (_) {}
+        return next;
+      });
+    },
+    [recordViolation]
+  );
+
+  // Deteksi Injeksi Ekstensi Browser AI (Harpa AI, Merlin, Sider, Monica, Tampermonkey, dll.)
+  useEffect(() => {
+    if (stage !== 'EXAM') return;
+
+    const suspiciousKeywords = [
+      'harpa',
+      'merlin',
+      'sider',
+      'monica',
+      'chathub',
+      'chatgpt-sidebar',
+      'chatgpt',
+      'ai-assistant',
+      'tampermonkey',
+      'violentmonkey',
+      'userscript',
+      'deepseek',
+      'copilot',
+      'perplexity',
+      'inject-ai',
+    ];
+
+    let lastExtWarnMs = 0;
+
+    const checkElementForAi = (node) => {
+      if (!node || node.nodeType !== 1) return;
+      const tag = (node.tagName || '').toLowerCase();
+      const id = (node.id || '').toLowerCase();
+      const cls = (typeof node.className === 'string' ? node.className : '').toLowerCase();
+      const title = (node.title || '').toLowerCase();
+
+      // Abaikan elemen bawaan aplikasi kuis
+      if (
+        id.startsWith('root') ||
+        cls.includes('quiz') ||
+        cls.includes('essay') ||
+        cls.includes('splitscreen') ||
+        cls.includes('card')
+      ) {
+        return;
+      }
+
+      const matched = suspiciousKeywords.find(
+        (kw) => id.includes(kw) || cls.includes(kw) || tag.includes(kw) || title.includes(kw)
+      );
+
+      if (matched && isExamActiveRef.current && !isSubmittingRef.current) {
+        try {
+          node.remove();
+        } catch (_) {}
+
+        if (Date.now() - lastExtWarnMs > 8000) {
+          lastExtWarnMs = Date.now();
+          recordViolation(
+            'AI_EXTENSION_INJECTION',
+            `Terdeteksi injeksi elemen ekstensi AI (${matched.toUpperCase()}): <${tag} id="${node.id || '-'}" class="${node.className || '-'}">`
+          );
+        }
+      }
+    };
+
+    // Periksa elemen yang sudah ada saat halaman dimuat
+    try {
+      document.querySelectorAll('*').forEach(checkElementForAi);
+    } catch (_) {}
+
+    // Pantau injeksi elemen baru secara dinamis
+    const observer = new MutationObserver((mutations) => {
+      for (const m of mutations) {
+        if (m.addedNodes && m.addedNodes.length > 0) {
+          m.addedNodes.forEach(checkElementForAi);
+        }
+      }
     });
-  }, []);
+
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['id', 'class'],
+    });
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [stage, recordViolation]);
 
   const handleFocusQuestion = useCallback(
     (qNum) => {
@@ -1827,6 +2048,47 @@ export function StudentQuizPage() {
                   onClick={evaluateSplitScreen}
                 >
                   🔄 Periksa Ulang Layar Penuh
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* OVERLAY PERINGATAN KELUAR FULLSCREEN */}
+          {fullscreenExited && (
+            <div className="splitscreen-overlay" style={{ zIndex: 100000 }}>
+              <div className="splitscreen-card">
+                <div style={{ fontSize: '3rem', marginBottom: 6 }}>🖥️🚫</div>
+                <h3 style={{ color: '#dc2626', fontWeight: 800, fontSize: '1.2rem', marginBottom: 8 }}>
+                  PERINGATAN: KELUAR DARI LAYAR PENUH!
+                </h3>
+                <p style={{ color: '#475569', fontSize: '0.86rem', lineHeight: 1.5, marginBottom: 12 }}>
+                  Ujian ini <strong>WAJIB dikerjakan dalam mode Layar Penuh (Fullscreen)</strong> untuk menjaga integritas ujian dan mencegah pembukaan aplikasi lain.
+                  Aksi keluar dari layar penuh telah dicatat sebagai pelanggaran.
+                </p>
+                <div
+                  style={{
+                    background: '#fef2f2',
+                    border: '1px solid #fecaca',
+                    borderRadius: 8,
+                    padding: '10px 12px',
+                    marginBottom: 16,
+                    fontSize: '0.8rem',
+                    color: '#991b1b',
+                    fontWeight: 700,
+                  }}
+                >
+                  ⚠️ Pelanggaran dicatat ({violationCount}/{countsRef.current.max}). Silakan klik tombol di bawah untuk kembali ke mode layar penuh.
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-primary btn-touchable"
+                  style={{ width: '100%', fontWeight: 700, padding: '10px 16px' }}
+                  onClick={() => {
+                    enterFullscreen();
+                    setFullscreenExited(false);
+                  }}
+                >
+                  🖥️ Kembali ke Layar Penuh
                 </button>
               </div>
             </div>
